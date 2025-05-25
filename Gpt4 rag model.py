@@ -4,15 +4,17 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-import openai
 import os
 import re
 from symspellpy.symspellpy import SymSpell, Verbosity
 import pkg_resources
 import random
+from openai import OpenAI
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Initialize SymSpell for spell correction
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
@@ -76,7 +78,10 @@ def build_faiss_index(embeddings):
 def query_gpt4_with_context(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
     if is_greeting(clean_query):
-        return random.choice(["Hello!", "Hi there!", "Hey!", "Greetings!", "I'm doing well, thank you!", "Sure pal", "Okay", "I'm fine, thank you"])
+        return random.choice([
+            "Hello!", "Hi there!", "Hey!", "Greetings!",
+            "I'm doing well, thank you!", "Sure pal", "Okay", "I'm fine, thank you"
+        ])
     query_embedding = model.encode([clean_query])
     D, I = index.search(np.array(query_embedding), top_k)
     context_blocks = [df.iloc[i]['text'] for i in I[0] if i < len(df)]
@@ -91,14 +96,14 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
         {"role": "user", "content": f"Based on the following context:\n\n{context_string}\n\nAnswer the following question:\n{user_query}"}
     ]
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=messages,
             temperature=0.3
         )
-        return response.choices[0].message["content"].strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"\u274c Error calling GPT-4: {str(e)}"
+        return f"❌ Error calling GPT-4: {str(e)}"
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
@@ -109,9 +114,6 @@ def get_related_questions(user_query, df, index, model, top_k=5):
 # Streamlit UI setup
 st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
-st.title("🎓 Crescent University RAG Chatbot")
-
-# Load data/model/index
 df = load_data()
 model = load_model()
 embeddings = model.encode(df["text"].tolist(), convert_to_numpy=True)
@@ -124,16 +126,17 @@ if "related_questions" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state.feedback = []
 
-# Sidebar
+# --- Sidebar ---
 with st.sidebar:
-    st.title("🧭 Options")
+    st.title("Crescent University RAG Chatbot")
+    st.markdown("### 🧭 Options")
     if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
         st.session_state.feedback = []
         st.experimental_rerun()
 
-# CSS Styling
+# --- CSS Styling ---
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
 <style>
@@ -185,23 +188,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Display Chat Messages
+# --- Display Messages ---
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-for chat in st.session_state.history:
+for i, chat in enumerate(st.session_state.history):
     role_class = "user-message" if chat["role"] == "user" else "bot-message"
     label = "You" if chat["role"] == "user" else "Bot"
     st.markdown(f'<div class="{role_class}"><strong>{label}:</strong> {chat["content"]}</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Input
+# --- User Input ---
 user_input = st.text_input("Ask your question:")
+
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
     response = query_gpt4_with_context(user_input, df, index, model)
     st.session_state.history.append({"role": "bot", "content": response})
     st.session_state.related_questions = get_related_questions(user_input, df, index, model)
 
-# Related Questions
+# --- Related Questions ---
 if st.session_state.related_questions:
     st.markdown("#### 🔍 Related Questions:")
     for q in st.session_state.related_questions:
