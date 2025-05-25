@@ -107,8 +107,11 @@ def get_related_questions(user_query, df, index, model, top_k=5):
     return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
 # Streamlit UI setup
-st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="\ud83c\udf93", layout="wide")
+st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
+st.title("🎓 Crescent University RAG Chatbot")
+
+# Load data/model/index
 df = load_data()
 model = load_model()
 embeddings = model.encode(df["text"].tolist(), convert_to_numpy=True)
@@ -121,28 +124,16 @@ if "related_questions" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state.feedback = []
 
-# --- Sidebar: Clear Chat Button ---
+# Sidebar
 with st.sidebar:
-    st.title("\ud83e\uddfd Options")
-    if st.button("\ud83d\uddd1\ufe0f Clear Chat"):
+    st.title("🧭 Options")
+    if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
         st.session_state.feedback = []
         st.experimental_rerun()
 
-# --- Page Title ---
-st.markdown("""
-<div style="text-align: center; padding: 10px 0 20px;">
-    <h1 style="font-family: 'Merriweather', serif; color: #004080;">
-        \ud83c\udf93 Crescent University Chatbot
-    </h1>
-    <p style="font-size: 1.1rem; color: #333;">
-        Ask anything about admissions, courses, departments, and more.
-    </p>
-</div>
-""", unsafe_allow_html=True)
-
-# --- CSS Styling ---
+# CSS Styling
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
 <style>
@@ -194,26 +185,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Display Messages ---
+# Display Chat Messages
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-for i, chat in enumerate(st.session_state.history):
+for chat in st.session_state.history:
     role_class = "user-message" if chat["role"] == "user" else "bot-message"
     label = "You" if chat["role"] == "user" else "Bot"
     st.markdown(f'<div class="{role_class}"><strong>{label}:</strong> {chat["content"]}</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# --- User Input ---
+# Input
 user_input = st.text_input("Ask your question:")
-
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
     response = query_gpt4_with_context(user_input, df, index, model)
     st.session_state.history.append({"role": "bot", "content": response})
     st.session_state.related_questions = get_related_questions(user_input, df, index, model)
 
-# --- Related Questions ---
+# Related Questions
 if st.session_state.related_questions:
-    st.markdown("#### \ud83d\udd0d Related Questions:")
+    st.markdown("#### 🔍 Related Questions:")
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
