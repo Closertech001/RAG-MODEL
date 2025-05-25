@@ -12,11 +12,7 @@ import random
 from openai import OpenAI
 
 # --- Check API key ---
-if not os.getenv("OPENAI_API_KEY"):
-    st.error("❌ OPENAI_API_KEY not set in environment.")
-    st.stop()
-
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # --- SymSpell setup ---
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
