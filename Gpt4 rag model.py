@@ -128,7 +128,6 @@ def query_gpt_with_context(user_query, df, index, model, top_k=5):
     ]
 
     try:
-        # Try GPT-4-turbo first
         try:
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
@@ -137,14 +136,13 @@ def query_gpt_with_context(user_query, df, index, model, top_k=5):
             )
         except Exception as e:
             if "model_not_found" in str(e) or "does not exist" in str(e):
-                # Fallback to gpt-3.5-turbo
                 response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=messages,
                     temperature=0.3
                 )
             else:
-                raise e  # Re-raise other errors
+                raise e
 
         return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
 
@@ -190,28 +188,21 @@ for chat in st.session_state.history:
     else:
         st.chat_message("assistant").write(chat["content"])
 
-# Chat input (only one)
+# Chat input
 user_input = st.chat_input("Ask your question:")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
-
     filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-    
+
     if not filtered_df.empty:
         filtered_embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
         index = build_faiss_index(filtered_embeddings)
-
-        response = query_gpt4_with_context(user_input, filtered_df, index, model)
+        response = query_gpt_with_context(user_input, filtered_df, index, model)
         st.session_state.history.append({"role": "assistant", "content": response})
-
-        related = get_related_questions(user_input, filtered_df, index, model)
-        st.session_state.related_questions = related
+        st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
     else:
-        st.session_state.history.append({
-            "role": "assistant",
-            "content": "⚠️ No matching data found for the selected filters."
-        })
+        st.session_state.history.append({"role": "assistant", "content": "⚠️ No matching data found for the selected filters."})
 
 # Related questions
 if st.session_state.related_questions:
@@ -223,5 +214,22 @@ if st.session_state.related_questions:
             if not filtered_df.empty:
                 filtered_embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
                 index = build_faiss_index(filtered_embeddings)
-                response = query_gpt4_with_context(q, filtered_df, index, model)
+                response = query_gpt_with_context(q, filtered_df, index, model)
                 st.session_state.history.append({"role": "assistant", "content": response})
+
+with st.form(key="chat_form", clear_on_submit=True):
+    user_input = st.text_input("Ask your question:", key="user_input")
+    submitted = st.form_submit_button("Send")
+
+if submitted and user_input:
+    filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
+    if not filtered_df.empty:
+        filtered_embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+        filtered_index = build_faiss_index(filtered_embeddings)
+        st.session_state.history.append({"role": "user", "content": user_input})
+        response = query_gpt_with_context(user_input, filtered_df, filtered_index, model)
+        st.session_state.history.append({"role": "assistant", "content": response})
+        st.session_state.related_questions = get_related_questions(user_input, filtered_df, filtered_index, model)
+    else:
+        st.session_state.history.append({"role": "user", "content": user_input})
+        st.session_state.history.append({"role": "assistant", "content": "No matching data found for the selected filters."})
