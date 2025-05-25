@@ -114,11 +114,9 @@ def get_related_questions(user_query, df, index, model, top_k=5):
             related_qs.append(df.iloc[i]['question'])
     return related_qs
 
-# --- Streamlit UI ---
+# --- Streamlit UI setup ---
 
-st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓")
-
-st.title("🎓 Crescent University RAG Chatbot with GPT-4")
+st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
 # Load data and model once
 df = load_data()
@@ -136,48 +134,116 @@ if "related_questions" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state.feedback = []
 
+# CSS styles for chat UI and related questions
+st.markdown("""
+<style>
+.chat-container {
+    max-height: 480px;
+    overflow-y: auto;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    background-color: #fafafa;
+    margin-bottom: 10px;
+}
+.user-message {
+    background-color: #DCF8C6;
+    padding: 12px 15px;
+    border-radius: 15px 15px 0 15px;
+    max-width: 70%;
+    margin-left: auto;
+    margin-bottom: 10px;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 15px;
+    word-wrap: break-word;
+}
+.bot-message {
+    background-color: #F1F0F0;
+    padding: 12px 15px;
+    border-radius: 15px 15px 15px 0;
+    max-width: 70%;
+    margin-right: auto;
+    margin-bottom: 10px;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 15px;
+    word-wrap: break-word;
+}
+.related-container {
+    margin-top: 10px;
+    margin-bottom: 20px;
+}
+.related-button {
+    background-color: #e0e0e0;
+    border: none;
+    border-radius: 20px;
+    padding: 7px 15px;
+    margin: 5px 5px 5px 0;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s ease;
+}
+.related-button:hover {
+    background-color: #a0c4ff;
+    color: #000;
+}
+.feedback-buttons button {
+    margin-right: 10px;
+}
+.input-container {
+    display: flex;
+    margin-top: 15px;
+}
+input[type="text"] {
+    flex-grow: 1;
+    padding: 10px;
+    font-size: 16px;
+    border-radius: 8px 0 0 8px;
+    border: 1px solid #ccc;
+    outline: none;
+}
+button.send-btn {
+    padding: 10px 20px;
+    font-size: 16px;
+    border-radius: 0 8px 8px 0;
+    border: 1px solid #ccc;
+    background-color: #4CAF50;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+button.send-btn:hover {
+    background-color: #45a049;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# --- Display chat history ---
 def display_messages():
+    st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
     for i, chat in enumerate(st.session_state.history):
         if chat["role"] == "user":
-            st.markdown(f'<div style="text-align: right; background-color:#DCF8C6; padding:8px; border-radius:10px; margin:5px;">**You:** {chat["content"]}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="user-message"><strong>You:</strong> {chat["content"]}</div>',
+                unsafe_allow_html=True)
         else:
-            st.markdown(f'<div style="text-align: left; background-color:#F1F0F0; padding:8px; border-radius:10px; margin:5px;">**Bot:** {chat["content"]}</div>', unsafe_allow_html=True)
-            # Feedback buttons after bot reply
+            st.markdown(
+                f'<div class="bot-message"><strong>Bot:</strong> {chat["content"]}</div>',
+                unsafe_allow_html=True)
             cols = st.columns([1,1,8])
-            if cols[0].button("👍", key=f"like_{i}"):
-                st.session_state.feedback.append({"index": i, "feedback": "like"})
-            if cols[1].button("👎", key=f"dislike_{i}"):
-                st.session_state.feedback.append({"index": i, "feedback": "dislike"})
+            with cols[0]:
+                if st.button("👍", key=f"like_{i}"):
+                    st.session_state.feedback.append({"index": i, "feedback": "like"})
+            with cols[1]:
+                if st.button("👎", key=f"dislike_{i}"):
+                    st.session_state.feedback.append({"index": i, "feedback": "dislike"})
+    st.markdown('</div>', unsafe_allow_html=True)
 
-def submit():
-    user_question = st.session_state.input_text.strip()
-    if user_question:
-        st.session_state.history.append({"role": "user", "content": user_question})
-        with st.spinner("Generating answer..."):
-            answer = query_gpt4_with_context(user_question, df, index, model)
-        st.session_state.history.append({"role": "bot", "content": answer})
-        # Get related questions except the current one
-        related_questions = get_related_questions(user_question, df, index, model, top_k=5)
-        st.session_state.related_questions = [rq for rq in related_questions if rq != user_question]
-        st.session_state.input_text = ""
-
-display_messages()
-
-if st.session_state.related_questions:
-    st.markdown("### 🔍 Related Questions:")
-    for rq in st.session_state.related_questions:
-        if st.button(rq, key=f"related_{rq}"):
-            # Set input text and trigger submit for the clicked related question
-            st.session_state.input_text = rq
-            submit()
-            # Redisplay updated messages and clear related questions (optional)
-            display_messages()
-            st.experimental_rerun()
-
-# Input area with multiline + enter to send
-st.text_area("Ask a question about Crescent University:", key="input_text", height=70, on_change=submit)
-
-# Optional: show collected feedback
-if st.session_state.feedback:
-    st.write("Thank you for your feedback! 👍👎")
-    # You can extend this to log or process feedback further
+# --- Display related questions ---
+def display_related_questions():
+    if st.session_state.related_questions:
+        st.markdown('<div class="related-container"><strong>🔍 Related Questions:</strong></div>', unsafe_allow_html=True)
+        # Show buttons in a horizontal layout with wrapping
+        cols = st.columns(len(st.session_state.related_questions))
+        for idx, rq in enumerate(st.session_state.related_questions):
+            with cols[idx]:
+                if st.button
