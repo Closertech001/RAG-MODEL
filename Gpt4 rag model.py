@@ -1,3 +1,4 @@
+import streamlit as st
 import json
 import pandas as pd
 from sentence_transformers import SentenceTransformer
@@ -8,14 +9,17 @@ import os
 import re
 from symspellpy.symspellpy import SymSpell, Verbosity
 import pkg_resources
+import random
 
-# Step 0: Setup and spell correction
+# Set OpenAI API key from environment variable
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+# Initialize SymSpell spell corrector
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
 
+# Abbreviations dict for preprocessing
 abbreviations = {
     "u": "you", "r": "are", "ur": "your", "ow": "how", "pls": "please", "plz": "please",
     "tmrw": "tomorrow", "cn": "can", "wat": "what", "cud": "could", "shud": "should",
@@ -48,39 +52,33 @@ def is_greeting(text):
                  "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"]
     return text.lower().strip() in greetings
 
-# Step 1: Load raw dataset
-with open("qa_dataset (1).json", "r", encoding="utf-8") as f:
-    raw_data = json.load(f)
+@st.cache_data
+def load_data():
+    with open("qa_dataset (1).json", "r", encoding="utf-8") as f:
+        raw_data = json.load(f)
 
-# Step 2: Prepare combined Q&A entries for RAG
-rag_data = []
-for entry in raw_data:
-    question = entry.get("question", "").strip()
-    answer = entry.get("answer", "").strip()
-    if question and answer:
-        combined_text = f"Q: {question}\nA: {answer}"
-        rag_data.append({"text": combined_text, "question": question})
+    rag_data = []
+    for entry in raw_data:
+        question = entry.get("question", "").strip()
+        answer = entry.get("answer", "").strip()
+        if question and answer:
+            combined_text = f"Q: {question}\nA: {answer}"
+            rag_data.append({"text": combined_text, "question": question})
 
-# Step 3: Convert to DataFrame
-df = pd.DataFrame(rag_data)
+    df = pd.DataFrame(rag_data)
+    return df
 
-# Step 4: Load sentence transformer model for embedding
-model = SentenceTransformer("all-MiniLM-L6-v2")
-embeddings = model.encode(df["text"].tolist(), convert_to_numpy=True)
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
-# Step 5: Create FAISS index
-dimension = embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(embeddings)
+@st.cache_resource
+def build_faiss_index(embeddings):
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings)
+    return index
 
-# Step 6: Save embeddings and data
-faiss.write_index(index, "rag_index.faiss")
-df.to_csv("rag_ready_dataset.csv", index=False, encoding="utf-8")
-
-print("✅ FAISS index saved as 'rag_index.faiss'")
-print("✅ Dataset saved as 'rag_ready_dataset.csv'")
-
-# Step 7: Define GPT-4 RAG function
 def query_gpt4_with_context(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
 
@@ -118,6 +116,20 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
     except Exception as e:
         return f"❌ Error calling GPT-4: {str(e)}"
 
-# Example usage (uncomment to test)
-# user_question = "What is the duration of MTH 101?"
-# print(query_gpt4_with_context(user_question, df, index, model))
+# --- Streamlit UI ---
+
+st.title("Crescent University RAG Chatbot with GPT-4")
+
+df = load_data()
+model = load_model()
+
+embeddings = model.encode(df["text"].tolist(), convert_to_numpy=True)
+index = build_faiss_index(embeddings)
+
+user_question = st.text_input("Ask a question about Crescent University:")
+
+if user_question:
+    with st.spinner("Generating answer..."):
+        answer = query_gpt4_with_context(user_question, df, index, model)
+    st.markdown("**Answer:**")
+    st.write(answer)
