@@ -1,5 +1,3 @@
-# Refactored Crescent University RAG Chatbot with improvements
-
 import streamlit as st
 import json
 import pandas as pd
@@ -11,20 +9,21 @@ import re
 from symspellpy.symspellpy import SymSpell, Verbosity
 import pkg_resources
 import random
-import openai
+from openai import OpenAI
 
-# --- Safety check: API key ---
+# --- Check API key ---
 if not os.getenv("OPENAI_API_KEY"):
-    st.error("\u274c OPENAI_API_KEY not set in environment.")
+    st.error("❌ OPENAI_API_KEY not set in environment.")
     st.stop()
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- Spell correction setup ---
+# --- SymSpell setup ---
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
 
+# --- Abbreviations dictionary ---
 abbreviations = {
     "u": "you", "r": "are", "ur": "your", "ow": "how", "pls": "please", "plz": "please",
     "tmrw": "tomorrow", "cn": "can", "wat": "what", "cud": "could", "shud": "should",
@@ -53,8 +52,10 @@ def preprocess_text(text):
     return ' '.join(corrected)
 
 def is_greeting(text):
-    greetings = ["hi", "hello", "hey", "hi there", "greetings", "how are you", "how are you doing",
-                 "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"]
+    greetings = [
+        "hi", "hello", "hey", "hi there", "greetings", "how are you", "how are you doing",
+        "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"
+    ]
     return text.lower().strip() in greetings
 
 @st.cache_data
@@ -63,7 +64,7 @@ def load_data():
         with open("qa_dataset.json", "r", encoding="utf-8") as f:
             raw_data = json.load(f)
     except Exception as e:
-        st.error(f"\u274c Failed to load qa_dataset.json: {e}")
+        st.error(f"❌ Failed to load qa_dataset.json: {e}")
         st.stop()
 
     rag_data = []
@@ -74,19 +75,27 @@ def load_data():
         level = entry.get("level", "").strip()
         semester = entry.get("semester", "").strip()
         faculty = entry.get("faculty", "").strip()
+
         if question and answer:
             combined_text = f"Q: {question}\nA: {answer}"
-            rag_data.append({"text": combined_text, "question": question, "department": department,
-                             "level": level, "semester": semester, "faculty": faculty})
+            rag_data.append({
+                "text": combined_text,
+                "question": question,
+                "department": department,
+                "level": level,
+                "semester": semester,
+                "faculty": faculty
+            })
     return pd.DataFrame(rag_data)
 
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
+@st.cache_resource
 def build_faiss_index(embeddings):
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
     return index
 
@@ -101,31 +110,39 @@ def apply_filters(df, faculty, department, level, semester):
         df = df[df["semester"] == semester]
     return df
 
-def query_gpt_with_context(user_query, df, index, model, chat_history, top_k=5):
+def query_gpt_with_context(user_query, df, index, model, history, top_k=5):
     clean_query = preprocess_text(user_query)
+
     if is_greeting(clean_query):
-        return random.choice(["Hello!", "Hi there!", "Hey!", "Greetings!", "I'm fine, thank you!", "Sure pal"])
+        return random.choice([
+            "Hello!", "Hi there!", "Hey!", "Greetings!",
+            "I'm doing well, thank you!", "Sure, let's chat!", "Okay", "I'm fine, thank you"
+        ])
 
     query_embedding = model.encode([clean_query])
     D, I = index.search(np.array(query_embedding), top_k)
     context_blocks = [df.iloc[i]['text'] for i in I[0] if i < len(df)]
     context_string = "\n\n".join(context_blocks)
 
+    # Build conversation memory for the prompt
     messages = [
-        {"role": "system", "content": "You are a helpful assistant for Crescent University. Use the context to answer the user's question accurately."},
-        *chat_history[-6:],
-        {"role": "user", "content": f"Context:\n{context_string}\n\nQuestion: {user_query}"}
+        {"role": "system", "content": "You are a helpful assistant for Crescent University. Use the provided context to answer clearly and politely."}
     ]
+    # Add conversation history (last 5 messages max)
+    for h in history[-10:]:
+        messages.append(h)
+    # Add current context + question
+    messages.append({"role": "user", "content": f"Context:\n{context_string}\n\nQuestion: {user_query}"})
 
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Use your accessible GPT-4 variant or GPT-4o-mini
             messages=messages,
-            temperature=0.3
+            temperature=0.3,
         )
-        return response.choices[0].message.content.strip()
+        return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
     except Exception as e:
-        return f"\u274c GPT API Error: {str(e)}"
+        return f"❌ GPT API Error: {str(e)}"
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
@@ -133,65 +150,84 @@ def get_related_questions(user_query, df, index, model, top_k=5):
     D, I = index.search(np.array(query_embedding), top_k)
     return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
-def handle_user_question(question, df, model, selected_faculty, selected_department, selected_level, selected_semester):
-    st.session_state.history.append({"role": "user", "content": question})
-    filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-
-    if filtered_df.empty:
-        st.session_state.history.append({"role": "assistant", "content": "\u26a0\ufe0f No matching data found."})
-        return
-
-    cache_key = f"{selected_faculty}_{selected_department}_{selected_level}_{selected_semester}"
-    embeddings = st.session_state.embedding_cache.get(cache_key)
-    if embeddings is None:
-        embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-        st.session_state.embedding_cache[cache_key] = embeddings
-
-    if f"index_{cache_key}" not in st.session_state:
-        st.session_state[f"index_{cache_key}"] = build_faiss_index(embeddings)
-    index = st.session_state[f"index_{cache_key}"]
-
-    response = query_gpt_with_context(question, filtered_df, index, model, st.session_state.history)
-    st.session_state.history.append({"role": "assistant", "content": response})
-    st.session_state.related_questions = get_related_questions(question, filtered_df, index, model)
-
 # --- Streamlit UI ---
-st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="\ud83c\udf93", layout="wide")
+st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
+
 df = load_data()
 model = load_model()
 
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = []  # List of {"role": "user"/"assistant", "content": "..."}
 if "related_questions" not in st.session_state:
     st.session_state.related_questions = []
-if "embedding_cache" not in st.session_state:
-    st.session_state.embedding_cache = {}
 
-# Sidebar
+# Sidebar Filters
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
-    if st.button("\ud83d\uddd1\ufe0f Clear Chat"):
+    if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
         st.experimental_rerun()
 
-    st.subheader("\ud83d\udcda Filters")
+    st.subheader("📚 Filters")
     selected_faculty = st.selectbox("Faculty", ["All"] + sorted(df["faculty"].dropna().unique().tolist()))
     selected_department = st.selectbox("Department", ["All"] + sorted(df["department"].dropna().unique().tolist()))
     selected_level = st.selectbox("Level", ["All"] + sorted(df["level"].dropna().unique().tolist()))
     selected_semester = st.selectbox("Semester", ["All"] + sorted(df["semester"].dropna().unique().tolist()))
 
-st.title("\ud83c\udf93 Crescent University Chatbot")
-
+# Display chat history
+st.title("🎓 Crescent University Chatbot")
 for chat in st.session_state.history:
-    st.chat_message(chat["role"]).write(chat["content"])
+    if chat["role"] == "user":
+        st.chat_message("user").write(chat["content"])
+    else:
+        st.chat_message("assistant").write(chat["content"])
 
+# Chat input box
 user_input = st.chat_input("Ask your question:")
-if user_input:
-    handle_user_question(user_input, df, model, selected_faculty, selected_department, selected_level, selected_semester)
 
+if user_input:
+    st.session_state.history.append({"role": "user", "content": user_input})
+
+    filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
+
+    if not filtered_df.empty:
+        # Embed filtered context once and cache in session state
+        cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
+        if "embedding_cache" not in st.session_state:
+            st.session_state.embedding_cache = {}
+
+        if cache_key in st.session_state.embedding_cache:
+            embeddings = st.session_state.embedding_cache[cache_key]
+        else:
+            embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+            st.session_state.embedding_cache[cache_key] = embeddings
+
+        index = build_faiss_index(embeddings)
+        response = query_gpt_with_context(user_input, filtered_df, index, model, st.session_state.history)
+
+        st.session_state.history.append({"role": "assistant", "content": response})
+        st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
+    else:
+        st.session_state.history.append({
+            "role": "assistant",
+            "content": "⚠️ No matching data found for the selected filters."
+        })
+
+# Related questions buttons
 if st.session_state.related_questions:
-    st.subheader("\ud83d\udd0d Related Questions:")
+    st.subheader("🔍 Related Questions:")
     for q in st.session_state.related_questions:
         if st.button(q):
-            handle_user_question(q, df, model, selected_faculty, selected_department, selected_level, selected_semester)
+            st.session_state.history.append({"role": "user", "content": q})
+            filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
+            if not filtered_df.empty:
+                cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
+                embeddings = st.session_state.embedding_cache.get(cache_key)
+                if embeddings is None:
+                    embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+                    st.session_state.embedding_cache[cache_key] = embeddings
+                index = build_faiss_index(embeddings)
+                response = query_gpt_with_context(q, filtered_df, index, model, st.session_state.history)
+                st.session_state.history.append({"role": "assistant", "content": response})
+
