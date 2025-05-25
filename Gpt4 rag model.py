@@ -129,13 +129,14 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4-turbo",  # <- Updated model name
             messages=messages,
             temperature=0.3
         )
         return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
     except Exception as e:
         return f"❌ GPT-4 API Error: {str(e)}"
+
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
