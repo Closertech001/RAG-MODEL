@@ -9,17 +9,17 @@ import re
 from symspellpy.symspellpy import SymSpell, Verbosity
 import pkg_resources
 import random
-from openai import OpenAI
+import openai
 
-# --- Check API key ---
+# --- API Key ---
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# --- SymSpell setup ---
+# --- SymSpell Setup ---
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
 
-# --- Abbreviations dictionary ---
+# --- Abbreviations Dictionary ---
 abbreviations = {
     "u": "you", "r": "are", "ur": "your", "ow": "how", "pls": "please", "plz": "please",
     "tmrw": "tomorrow", "cn": "can", "wat": "what", "cud": "could", "shud": "should",
@@ -27,11 +27,12 @@ abbreviations = {
     "asap": "as soon as possible", "idk": "i don't know", "imo": "in my opinion",
     "msg": "message", "doc": "document", "d": "the", "yr": "year", "sem": "semester",
     "dept": "department", "admsn": "admission", "cresnt": "crescent", "uni": "university",
-    "clg": "college", "sch": "school", "info": "information", "l": "level", "CSC": "Computer Science",
-    "ECO": "Economics with Operations Research", "PHY": "Physics", "STAT": "Statistics",
-    "1st": "First", "2nd": "Second"
+    "clg": "college", "sch": "school", "info": "information", "l": "level", 
+    "CSC": "Computer Science", "ECO": "Economics with Operations Research", 
+    "PHY": "Physics", "STAT": "Statistics", "1st": "First", "2nd": "Second"
 }
 
+# --- Preprocessing ---
 def normalize_text(text):
     text = re.sub(r'([^a-zA-Z0-9\s])', '', text)
     text = re.sub(r'(.)\1{2,}', r'\1', text)
@@ -54,6 +55,7 @@ def is_greeting(text):
     ]
     return text.lower().strip() in greetings
 
+# --- Data Loading ---
 @st.cache_data
 def load_data():
     try:
@@ -77,6 +79,7 @@ def load_data():
             rag_data.append({
                 "text": combined_text,
                 "question": question,
+                "answer": answer,
                 "department": department,
                 "level": level,
                 "semester": semester,
@@ -88,7 +91,6 @@ def load_data():
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
-@st.cache_resource
 def build_faiss_index(embeddings):
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
@@ -122,7 +124,6 @@ def fallback_openai(user_input, context_qa=None):
     messages.append({"role": "user", "content": user_message})
 
     try:
-        import openai  # Ensure openai is imported if you're using fallback_openai
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -138,18 +139,22 @@ def get_related_questions(user_query, df, index, model, top_k=5):
     D, I = index.search(np.array(query_embedding), top_k)
     return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
-# --- Streamlit UI ---
+# --- Streamlit App ---
 st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
 df = load_data()
 model = load_model()
 
 if "history" not in st.session_state:
-    st.session_state.history = []  # List of {"role": "user"/"assistant", "content": "..."}
+    st.session_state.history = []
 if "related_questions" not in st.session_state:
     st.session_state.related_questions = []
+if "embedding_cache" not in st.session_state:
+    st.session_state.embedding_cache = {}
+if "faiss_index_cache" not in st.session_state:
+    st.session_state.faiss_index_cache = {}
 
-# Sidebar Filters
+# --- Sidebar ---
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
     if st.button("🗑️ Clear Chat"):
@@ -163,58 +168,73 @@ with st.sidebar:
     selected_level = st.selectbox("Level", ["All"] + sorted(df["level"].dropna().unique().tolist()))
     selected_semester = st.selectbox("Semester", ["All"] + sorted(df["semester"].dropna().unique().tolist()))
 
-# Display chat history
+# --- Main Chat Area ---
 st.title("🎓 Crescent University Chatbot")
-for chat in st.session_state.history:
-    if chat["role"] == "user":
-        st.chat_message("user").write(chat["content"])
-    else:
-        st.chat_message("assistant").write(chat["content"])
 
-# Chat input box
+for chat in st.session_state.history:
+    st.chat_message(chat["role"]).write(chat["content"])
+
 user_input = st.chat_input("Ask your question:")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
 
-    filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-
-    if not filtered_df.empty:
+    if is_greeting(user_input):
+        greeting_reply = random.choice([
+            "Hello! How can I assist you today? 😊",
+            "Hi there! Ask me anything about Crescent University.",
+            "Welcome! I'm here to help with any university-related question."
+        ])
+        st.session_state.history.append({"role": "assistant", "content": greeting_reply})
+    else:
+        filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
         cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
-        if "embedding_cache" not in st.session_state:
-            st.session_state.embedding_cache = {}
 
-        if cache_key in st.session_state.embedding_cache:
-            embeddings = st.session_state.embedding_cache[cache_key]
-        else:
+        if cache_key not in st.session_state.embedding_cache:
             embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
             st.session_state.embedding_cache[cache_key] = embeddings
+            st.session_state.faiss_index_cache[cache_key] = build_faiss_index(embeddings)
+        else:
+            embeddings = st.session_state.embedding_cache[cache_key]
 
-        index = build_faiss_index(embeddings)
-        # Make sure `query_gpt_with_context` function exists in your script
-        response = fallback_openai(user_input)  # or use query_gpt_with_context if defined
+        index = st.session_state.faiss_index_cache[cache_key]
 
-        st.session_state.history.append({"role": "assistant", "content": response})
-        st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
-    else:
-        st.session_state.history.append({
-            "role": "assistant",
-            "content": "⚠️ No matching data found for the selected filters."
-        })
+        if len(filtered_df) > 0:
+            query_embedding = model.encode([preprocess_text(user_input)], convert_to_numpy=True)
+            D, I = index.search(query_embedding, 1)
+            best_idx = I[0][0]
+            context_qa = {
+                "question": filtered_df.iloc[best_idx]["question"],
+                "answer": filtered_df.iloc[best_idx]["answer"]
+            }
+            response = fallback_openai(user_input, context_qa)
+            st.session_state.history.append({"role": "assistant", "content": response})
+            st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
+        else:
+            st.session_state.history.append({
+                "role": "assistant",
+                "content": "⚠️ No matching data found for the selected filters."
+            })
 
-# Related questions buttons
+# --- Related Questions ---
 if st.session_state.related_questions:
     st.subheader("🔍 Related Questions:")
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
             filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-            if not filtered_df.empty:
+            if filtered_df.empty:
+                st.session_state.history.append({"role": "assistant", "content": "No data available."})
+            else:
                 cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
-                embeddings = st.session_state.embedding_cache.get(cache_key)
-                if embeddings is None:
-                    embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-                    st.session_state.embedding_cache[cache_key] = embeddings
-                index = build_faiss_index(embeddings)
-                response = fallback_openai(q)
+                embeddings = st.session_state.embedding_cache[cache_key]
+                index = st.session_state.faiss_index_cache[cache_key]
+                query_embedding = model.encode([preprocess_text(q)], convert_to_numpy=True)
+                D, I = index.search(query_embedding, 1)
+                best_idx = I[0][0]
+                context_qa = {
+                    "question": filtered_df.iloc[best_idx]["question"],
+                    "answer": filtered_df.iloc[best_idx]["answer"]
+                }
+                response = fallback_openai(q, context_qa)
                 st.session_state.history.append({"role": "assistant", "content": response})
