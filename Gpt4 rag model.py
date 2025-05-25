@@ -244,6 +244,12 @@ def display_related_questions():
         st.markdown('<div class="related-container"><strong>🔍 Related Questions:</strong></div>', unsafe_allow_html=True)
         # Show buttons in a horizontal layout with wrapping
         cols = st.columns(len(st.session_state.related_questions))
-        for idx, rq in enumerate(st.session_state.related_questions):
-            with cols[idx]:
-                if st.button
+for idx, rq in enumerate(st.session_state.related_questions):
+    with cols[idx]:
+        if st.button(rq, key=f"related_{idx}"):
+            st.session_state.history.append({"role": "user", "content": rq})
+            response = query_gpt4_with_context(rq, df, index, model)
+            st.session_state.history.append({"role": "bot", "content": response})
+            st.session_state.related_questions = get_related_questions(rq, df, index, model)
+            st.experimental_rerun()
+
