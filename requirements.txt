@@ -1,8 +1,7 @@
-streamlit==1.24.0
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4
-symspellpy==6.7.7
-openai==0.27.6
-numpy==1.24.3
-pandas==2.0.2
-pkg_resources
+streamlit
+pandas
+numpy
+sentence-transformers
+faiss-cpu
+symspellpy
+openai
