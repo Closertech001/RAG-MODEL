@@ -109,33 +109,47 @@ def apply_filters(df, faculty, department, level, semester):
         df = df[df["semester"] == semester]
     return df
 
-def query_gpt4_with_context(user_query, df, index, model, top_k=5):
+def query_gpt_with_context(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
     if is_greeting(clean_query):
         return random.choice([
             "Hello!", "Hi there!", "Hey!", "Greetings!",
             "I'm doing well, thank you!", "Sure pal", "Okay", "I'm fine, thank you"
         ])
-    
+
     query_embedding = model.encode([clean_query])
     D, I = index.search(np.array(query_embedding), top_k)
     context_blocks = [df.iloc[i]['text'] for i in I[0] if i < len(df)]
     context_string = "\n\n".join(context_blocks)
-    
+
     messages = [
         {"role": "system", "content": "You are a helpful assistant for Crescent University. Use the provided context to answer."},
         {"role": "user", "content": f"Context:\n{context_string}\n\nQuestion: {user_query}"}
     ]
-    
+
     try:
-        response = client.chat.completions.create(
-            model="gpt-4",  # Use GPT-4 if you have access
-            messages=messages,
-            temperature=0.3
-        )
+        # Try GPT-4-turbo first
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=messages,
+                temperature=0.3
+            )
+        except Exception as e:
+            if "model_not_found" in str(e) or "does not exist" in str(e):
+                # Fallback to gpt-3.5-turbo
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    temperature=0.3
+                )
+            else:
+                raise e  # Re-raise other errors
+
         return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
+
     except Exception as e:
-        return f"❌ GPT-4 API Error: {str(e)}"
+        return f"❌ GPT API Error: {str(e)}"
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
