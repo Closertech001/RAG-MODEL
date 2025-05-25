@@ -134,12 +134,14 @@ st.markdown("""
     margin-bottom: 10px;
 }
 .user-message {
-    background-color: #DCF8C6;
-    padding: 12px 15px;
-    border-radius: 15px 15px 0 15px;
-    max-width: 70%;
-    margin-left: auto;
+    background-color: #d6eaff;
+    padding: 12px;
+    border-radius: 15px;
     margin-bottom: 10px;
+    margin-left: auto;
+    max-width: 75%;
+    font-weight: 550;
+    color: #000;
 }
 .bot-message {
     background-color: #F1F0F0;
