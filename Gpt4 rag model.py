@@ -113,36 +113,42 @@ def apply_filters(df, faculty, department, level, semester):
 def query_gpt_with_context(user_query, df, index, model, history, top_k=5):
     clean_query = preprocess_text(user_query)
 
+    # Handle greetings locally
     if is_greeting(clean_query):
         return random.choice([
             "Hello!", "Hi there!", "Hey!", "Greetings!",
             "I'm doing well, thank you!", "Sure, let's chat!", "Okay", "I'm fine, thank you"
         ])
 
+    # Embed query and search similar context
     query_embedding = model.encode([clean_query])
     D, I = index.search(np.array(query_embedding), top_k)
+
     context_blocks = [df.iloc[i]['text'] for i in I[0] if i < len(df)]
     context_string = "\n\n".join(context_blocks)
 
-    # Build conversation memory for the prompt
     messages = [
-        {"role": "system", "content": "You are a helpful assistant for Crescent University. Use the provided context to answer clearly and politely."}
+        {"role": "system", "content": "You are a helpful assistant for Crescent University. Use the provided context to answer user questions clearly."}
     ]
-    # Add conversation history (last 5 messages max)
-    for h in history[-10:]:
-        messages.append(h)
-    # Add current context + question
-    messages.append({"role": "user", "content": f"Context:\n{context_string}\n\nQuestion: {user_query}"})
+
+    # Add last 10 messages of conversation to keep context/memory
+    messages.extend(history[-10:])
+
+    # Add user question plus retrieved context
+    messages.append({
+        "role": "user",
+        "content": f"Context:\n{context_string}\n\nQuestion: {user_query}"
+    })
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Use your accessible GPT-4 variant or GPT-4o-mini
+            model="gpt-4o-mini",
             messages=messages,
             temperature=0.3,
         )
-        return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"❌ GPT API Error: {str(e)}"
+        return f"❌ GPT API error: {e}"
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
@@ -157,7 +163,7 @@ df = load_data()
 model = load_model()
 
 if "history" not in st.session_state:
-    st.session_state.history = []  # List of {"role": "user"/"assistant", "content": "..."}
+    st.session_state.history = []  # list of dicts with role & content
 if "related_questions" not in st.session_state:
     st.session_state.related_questions = []
 
@@ -175,7 +181,7 @@ with st.sidebar:
     selected_level = st.selectbox("Level", ["All"] + sorted(df["level"].dropna().unique().tolist()))
     selected_semester = st.selectbox("Semester", ["All"] + sorted(df["semester"].dropna().unique().tolist()))
 
-# Display chat history
+# Show chat history
 st.title("🎓 Crescent University Chatbot")
 for chat in st.session_state.history:
     if chat["role"] == "user":
@@ -192,7 +198,6 @@ if user_input:
     filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
 
     if not filtered_df.empty:
-        # Embed filtered context once and cache in session state
         cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
         if "embedding_cache" not in st.session_state:
             st.session_state.embedding_cache = {}
@@ -204,9 +209,10 @@ if user_input:
             st.session_state.embedding_cache[cache_key] = embeddings
 
         index = build_faiss_index(embeddings)
-        response = query_gpt_with_context(user_input, filtered_df, index, model, st.session_state.history)
 
+        response = query_gpt_with_context(user_input, filtered_df, index, model, st.session_state.history)
         st.session_state.history.append({"role": "assistant", "content": response})
+
         st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
     else:
         st.session_state.history.append({
@@ -230,4 +236,3 @@ if st.session_state.related_questions:
                 index = build_faiss_index(embeddings)
                 response = query_gpt_with_context(q, filtered_df, index, model, st.session_state.history)
                 st.session_state.history.append({"role": "assistant", "content": response})
-
