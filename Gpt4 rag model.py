@@ -144,12 +144,14 @@ st.markdown("""
     color: #000;
 }
 .bot-message {
-    background-color: #F1F0F0;
-    padding: 12px 15px;
-    border-radius: 15px 15px 15px 0;
-    max-width: 70%;
-    margin-right: auto;
+    background-color: #f5f5f5;
+    padding: 12px;
+    border-radius: 15px;
     margin-bottom: 10px;
+    margin-right: auto;
+    max-width: 75%;
+    font-weight: 600;
+    color: #000;
 }
 </style>
 """, unsafe_allow_html=True)
