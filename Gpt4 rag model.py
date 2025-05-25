@@ -136,7 +136,7 @@ def query_gpt_with_context(user_query, df, index, model, chat_history, top_k=5):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Use a model you have access to
+            model="gpt-4.1-nano (long context)",  # Use a model you have access to
             messages=messages,
             temperature=0.3
         )
