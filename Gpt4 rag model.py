@@ -129,7 +129,7 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4-turbo",  # <- Updated model name
+            model="gpt-4",  # <- Updated model name
             messages=messages,
             temperature=0.3
         )
