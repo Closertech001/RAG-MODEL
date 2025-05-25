@@ -146,7 +146,7 @@ def get_related_questions(user_query, df, index, model, top_k=5):
     return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="\ud83c\udf93", layout="wide")
+st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
 df = load_data()
 model = load_model()
