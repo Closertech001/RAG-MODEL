@@ -122,8 +122,14 @@ if "feedback" not in st.session_state:
     st.session_state.feedback = []
 
 # --- CSS Styling ---
-st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
 <style>
+    html, body, .stApp {
+        font-family: 'Open Sans', sans-serif;
+    }
+    h1, h2, h3, h4, h5 {
+        font-family: 'Merriweather', serif;
+        color: #004080;
 .chat-container {
     max-height: 480px;
     overflow-y: auto;
@@ -152,6 +158,15 @@ st.markdown("""
     max-width: 75%;
     font-weight: 600;
     color: #000;
+}
+.related-question {
+    background-color: #e6f2ff;
+    padding: 8px 12px;
+    margin: 6px 6px 6px 0;
+    display: inline-block;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    cursor: pointer;
 }
 </style>
 """, unsafe_allow_html=True)
