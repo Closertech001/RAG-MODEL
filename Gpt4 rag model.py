@@ -129,14 +129,13 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4",  # <- Updated model name
+            model="gpt-4",  # Use GPT-4 if you have access
             messages=messages,
             temperature=0.3
         )
         return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
     except Exception as e:
         return f"❌ GPT-4 API Error: {str(e)}"
-
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
@@ -177,7 +176,7 @@ for chat in st.session_state.history:
     else:
         st.chat_message("assistant").write(chat["content"])
 
-# Chat input
+# Chat input (only one)
 user_input = st.chat_input("Ask your question:")
 
 if user_input:
