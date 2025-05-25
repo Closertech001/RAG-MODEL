@@ -161,7 +161,7 @@ if "embedding_cache" not in st.session_state:
 # Sidebar Filters
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
-    if st.button("\ud83d\uddd1\ufe0f Clear Chat"):
+    if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
         st.experimental_rerun()
