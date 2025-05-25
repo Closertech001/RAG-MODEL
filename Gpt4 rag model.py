@@ -98,7 +98,7 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
         )
         return response.choices[0].message["content"].strip()
     except Exception as e:
-        return f"❌ Error calling GPT-4: {str(e)}"
+        return f"\u274c Error calling GPT-4: {str(e)}"
 
 def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
@@ -107,7 +107,7 @@ def get_related_questions(user_query, df, index, model, top_k=5):
     return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
 # Streamlit UI setup
-st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="\ud83c\udf93", layout="wide")
 
 df = load_data()
 model = load_model()
@@ -123,12 +123,24 @@ if "feedback" not in st.session_state:
 
 # --- Sidebar: Clear Chat Button ---
 with st.sidebar:
-    st.title("🧭 Options")
-    if st.button("🗑️ Clear Chat"):
+    st.title("\ud83e\uddfd Options")
+    if st.button("\ud83d\uddd1\ufe0f Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
         st.session_state.feedback = []
         st.experimental_rerun()
+
+# --- Page Title ---
+st.markdown("""
+<div style="text-align: center; padding: 10px 0 20px;">
+    <h1 style="font-family: 'Merriweather', serif; color: #004080;">
+        \ud83c\udf93 Crescent University Chatbot
+    </h1>
+    <p style="font-size: 1.1rem; color: #333;">
+        Ask anything about admissions, courses, departments, and more.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # --- CSS Styling ---
 st.markdown("""
@@ -182,7 +194,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 # --- Display Messages ---
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 for i, chat in enumerate(st.session_state.history):
@@ -202,7 +213,7 @@ if user_input:
 
 # --- Related Questions ---
 if st.session_state.related_questions:
-    st.markdown("#### 🔍 Related Questions:")
+    st.markdown("#### \ud83d\udd0d Related Questions:")
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
