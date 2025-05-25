@@ -60,8 +60,7 @@ def load_data():
         if question and answer:
             combined_text = f"Q: {question}\nA: {answer}"
             rag_data.append({"text": combined_text, "question": question})
-    df = pd.DataFrame(rag_data)
-    return df
+    return pd.DataFrame(rag_data)
 
 @st.cache_resource
 def load_model():
@@ -80,10 +79,7 @@ def query_gpt4_with_context(user_query, df, index, model, top_k=5):
         return random.choice(["Hello!", "Hi there!", "Hey!", "Greetings!", "I'm doing well, thank you!", "Sure pal", "Okay", "I'm fine, thank you"])
     query_embedding = model.encode([clean_query])
     D, I = index.search(np.array(query_embedding), top_k)
-    context_blocks = []
-    for i in I[0]:
-        if i < len(df):
-            context_blocks.append(df.iloc[i]['text'])
+    context_blocks = [df.iloc[i]['text'] for i in I[0] if i < len(df)]
     context_string = "\n\n".join(context_blocks)
     system_prompt = (
         "You are a helpful assistant for Crescent University. "
@@ -108,33 +104,24 @@ def get_related_questions(user_query, df, index, model, top_k=5):
     clean_query = preprocess_text(user_query)
     query_embedding = model.encode([clean_query])
     D, I = index.search(np.array(query_embedding), top_k)
-    related_qs = []
-    for i in I[0]:
-        if i < len(df):
-            related_qs.append(df.iloc[i]['question'])
-    return related_qs
+    return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
-# --- Streamlit UI setup ---
-
+# Streamlit UI setup
 st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
-# Load data and model once
 df = load_data()
 model = load_model()
 embeddings = model.encode(df["text"].tolist(), convert_to_numpy=True)
 index = build_faiss_index(embeddings)
 
-# Initialize session state for chat history, related questions, and feedback
 if "history" not in st.session_state:
     st.session_state.history = []
-
 if "related_questions" not in st.session_state:
     st.session_state.related_questions = []
-
 if "feedback" not in st.session_state:
     st.session_state.feedback = []
 
-# CSS styles for chat UI and related questions
+# --- CSS Styling ---
 st.markdown("""
 <style>
 .chat-container {
@@ -153,9 +140,6 @@ st.markdown("""
     max-width: 70%;
     margin-left: auto;
     margin-bottom: 10px;
-    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-    font-size: 15px;
-    word-wrap: break-word;
 }
 .bot-message {
     background-color: #F1F0F0;
@@ -164,92 +148,41 @@ st.markdown("""
     max-width: 70%;
     margin-right: auto;
     margin-bottom: 10px;
-    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-    font-size: 15px;
-    word-wrap: break-word;
-}
-.related-container {
-    margin-top: 10px;
-    margin-bottom: 20px;
-}
-.related-button {
-    background-color: #e0e0e0;
-    border: none;
-    border-radius: 20px;
-    padding: 7px 15px;
-    margin: 5px 5px 5px 0;
-    cursor: pointer;
-    font-size: 14px;
-    transition: background-color 0.3s ease;
-}
-.related-button:hover {
-    background-color: #a0c4ff;
-    color: #000;
-}
-.feedback-buttons button {
-    margin-right: 10px;
-}
-.input-container {
-    display: flex;
-    margin-top: 15px;
-}
-input[type="text"] {
-    flex-grow: 1;
-    padding: 10px;
-    font-size: 16px;
-    border-radius: 8px 0 0 8px;
-    border: 1px solid #ccc;
-    outline: none;
-}
-button.send-btn {
-    padding: 10px 20px;
-    font-size: 16px;
-    border-radius: 0 8px 8px 0;
-    border: 1px solid #ccc;
-    background-color: #4CAF50;
-    color: white;
-    cursor: pointer;
-    transition: background-color 0.3s ease;
-}
-button.send-btn:hover {
-    background-color: #45a049;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Display chat history ---
-def display_messages():
-    st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
-    for i, chat in enumerate(st.session_state.history):
-        if chat["role"] == "user":
-            st.markdown(
-                f'<div class="user-message"><strong>You:</strong> {chat["content"]}</div>',
-                unsafe_allow_html=True)
-        else:
-            st.markdown(
-                f'<div class="bot-message"><strong>Bot:</strong> {chat["content"]}</div>',
-                unsafe_allow_html=True)
-            cols = st.columns([1,1,8])
-            with cols[0]:
-                if st.button("👍", key=f"like_{i}"):
-                    st.session_state.feedback.append({"index": i, "feedback": "like"})
-            with cols[1]:
-                if st.button("👎", key=f"dislike_{i}"):
-                    st.session_state.feedback.append({"index": i, "feedback": "dislike"})
-    st.markdown('</div>', unsafe_allow_html=True)
+# --- Clear Chat Button ---
+top_cols = st.columns([10, 1])
+with top_cols[1]:
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.history = []
+        st.session_state.related_questions = []
+        st.session_state.feedback = []
+        st.experimental_rerun()
 
-# --- Display related questions ---
-def display_related_questions():
-    if st.session_state.related_questions:
-        st.markdown('<div class="related-container"><strong>🔍 Related Questions:</strong></div>', unsafe_allow_html=True)
-        # Show buttons in a horizontal layout with wrapping
-        cols = st.columns(len(st.session_state.related_questions))
-for idx, rq in enumerate(st.session_state.related_questions):
-    with cols[idx]:
-        if st.button(rq, key=f"related_{idx}"):
-            st.session_state.history.append({"role": "user", "content": rq})
-            response = query_gpt4_with_context(rq, df, index, model)
+# --- Display Messages ---
+st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+for i, chat in enumerate(st.session_state.history):
+    role_class = "user-message" if chat["role"] == "user" else "bot-message"
+    label = "You" if chat["role"] == "user" else "Bot"
+    st.markdown(f'<div class="{role_class}"><strong>{label}:</strong> {chat["content"]}</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# --- User Input ---
+user_input = st.text_input("Ask your question:")
+
+if user_input:
+    st.session_state.history.append({"role": "user", "content": user_input})
+    response = query_gpt4_with_context(user_input, df, index, model)
+    st.session_state.history.append({"role": "bot", "content": response})
+    st.session_state.related_questions = get_related_questions(user_input, df, index, model)
+
+# --- Related Questions ---
+if st.session_state.related_questions:
+    st.markdown("#### 🔍 Related Questions:")
+    for q in st.session_state.related_questions:
+        if st.button(q):
+            st.session_state.history.append({"role": "user", "content": q})
+            response = query_gpt4_with_context(q, df, index, model)
             st.session_state.history.append({"role": "bot", "content": response})
-            st.session_state.related_questions = get_related_questions(rq, df, index, model)
-            st.experimental_rerun()
-
