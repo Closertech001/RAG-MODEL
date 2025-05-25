@@ -209,6 +209,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+st.title("🎓 Crescent University Chatbot")
+
 # Display Chat History
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 for chat in st.session_state.history:
