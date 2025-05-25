@@ -121,7 +121,17 @@ if "related_questions" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state.feedback = []
 
+# --- Sidebar: Clear Chat Button ---
+with st.sidebar:
+    st.title("🧭 Options")
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.history = []
+        st.session_state.related_questions = []
+        st.session_state.feedback = []
+        st.experimental_rerun()
+
 # --- CSS Styling ---
+st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
 <style>
     html, body, .stApp {
@@ -130,55 +140,48 @@ if "feedback" not in st.session_state:
     h1, h2, h3, h4, h5 {
         font-family: 'Merriweather', serif;
         color: #004080;
-.chat-container {
-    max-height: 480px;
-    overflow-y: auto;
-    padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 10px;
-    background-color: #fafafa;
-    margin-bottom: 10px;
-}
-.user-message {
-    background-color: #d6eaff;
-    padding: 12px;
-    border-radius: 15px;
-    margin-bottom: 10px;
-    margin-left: auto;
-    max-width: 75%;
-    font-weight: 550;
-    color: #000;
-}
-.bot-message {
-    background-color: #f5f5f5;
-    padding: 12px;
-    border-radius: 15px;
-    margin-bottom: 10px;
-    margin-right: auto;
-    max-width: 75%;
-    font-weight: 600;
-    color: #000;
-}
-.related-question {
-    background-color: #e6f2ff;
-    padding: 8px 12px;
-    margin: 6px 6px 6px 0;
-    display: inline-block;
-    border-radius: 10px;
-    font-size: 0.9rem;
-    cursor: pointer;
-}
+    }
+    .chat-container {
+        max-height: 480px;
+        overflow-y: auto;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        background-color: #fafafa;
+        margin-bottom: 10px;
+    }
+    .user-message {
+        background-color: #d6eaff;
+        padding: 12px;
+        border-radius: 15px;
+        margin-bottom: 10px;
+        margin-left: auto;
+        max-width: 75%;
+        font-weight: 550;
+        color: #000;
+    }
+    .bot-message {
+        background-color: #f5f5f5;
+        padding: 12px;
+        border-radius: 15px;
+        margin-bottom: 10px;
+        margin-right: auto;
+        max-width: 75%;
+        font-weight: 600;
+        color: #000;
+    }
+    .related-question {
+        background-color: #e6f2ff;
+        padding: 8px 12px;
+        margin: 6px 6px 6px 0;
+        display: inline-block;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        cursor: pointer;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Clear Chat Button ---
-top_cols = st.columns([10, 1])
-with top_cols[1]:
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.history = []
-        st.session_state.related_questions = []
-        st.session_state.feedback = []
-        st.experimental_rerun()
 
 # --- Display Messages ---
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
