@@ -10,12 +10,15 @@ from symspellpy.symspellpy import SymSpell, Verbosity
 import pkg_resources
 import random
 from openai import OpenAI
+from datetime import datetime
+import time
 
 # -- Safety check: API key
 if not os.getenv("OPENAI_API_KEY"):
     st.error("❌ OPENAI_API_KEY not set in environment.")
     st.stop()
 
+# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Initialize SymSpell
@@ -23,6 +26,7 @@ sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
 
+# Abbreviations dictionary
 abbreviations = {
     "u": "you", "r": "are", "ur": "your", "ow": "how", "pls": "please", "plz": "please",
     "tmrw": "tomorrow", "cn": "can", "wat": "what", "cud": "could", "shud": "should",
@@ -51,14 +55,11 @@ def preprocess_text(text):
     return ' '.join(corrected)
 
 def is_greeting(text):
-    greetings = [
-        "hi", "hello", "hey", "hi there", "greetings", "how are you",
-        "how are you doing", "how's it going", "can we talk?", "can we have a conversation?",
-        "okay", "i'm fine", "i am fine"
-    ]
+    greetings = ["hi", "hello", "hey", "hi there", "greetings", "how are you", "how are you doing",
+                 "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"]
     return text.lower().strip() in greetings
 
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def load_data():
     try:
         with open("qa_dataset.json", "r", encoding="utf-8") as f:
@@ -88,11 +89,11 @@ def load_data():
             })
     return pd.DataFrame(rag_data)
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource
 def build_faiss_index(embeddings):
     dimension = embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)
@@ -110,33 +111,54 @@ def apply_filters(df, faculty, department, level, semester):
         df = df[df["semester"] == semester]
     return df
 
-def generate_prompt_with_memory(history, context_string, user_query):
-    # Limit history length to last 6 messages for token economy
-    recent_history = history[-6:] if len(history) > 6 else history
+def get_related_questions(user_query, df, index, model, top_k=6):
+    clean_query = preprocess_text(user_query)
+    query_embedding = model.encode([clean_query])
+    D, I = index.search(np.array(query_embedding), top_k)
+    return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
 
+# Summarize older history if > 12 messages (keeps last 6 detailed)
+def summarize_history(history):
+    if len(history) <= 12:
+        return None, history
+    to_summarize = history[:-6]
+    recent = history[-6:]
+
+    summary_prompt = [
+        {"role": "system", "content": "Summarize the following conversation between user and assistant into concise bullet points for context."},
+    ] + [{"role": m["role"] if m["role"]!="bot" else "assistant", "content": m["content"]} for m in to_summarize]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=summary_prompt,
+            temperature=0.5,
+            max_tokens=150
+        )
+        summary = response.choices[0].message.content.strip()
+    except Exception as e:
+        summary = None
+    return summary, recent
+
+def generate_prompt_with_memory(history, context_string, user_query, summary=None):
     messages = [
-        {"role": "system", "content": "You are a helpful assistant for Crescent University. Use the context and remember the conversation."}
+        {"role": "system", "content": "You are a helpful assistant for Crescent University."}
     ]
+    if summary:
+        messages.append({"role": "system", "content": f"Conversation summary so far:\n{summary}"})
 
-    # Add context as system message for knowledge base
     if context_string:
         messages.append({"role": "system", "content": f"Context:\n{context_string}"})
 
-    # Add conversation history
-    for msg in recent_history:
-        # Roles: 'user' or 'assistant'
-        if msg["role"] == "bot":
-            role = "assistant"
-        else:
-            role = msg["role"]
+    # Add recent conversation messages (last 6)
+    for msg in history[-6:]:
+        role = "assistant" if msg["role"] == "bot" else msg["role"]
         messages.append({"role": role, "content": msg["content"]})
 
-    # Add current user query last
     messages.append({"role": "user", "content": user_query})
-
     return messages
 
-def query_openai_with_memory(user_query, df, index, model, history, top_k=5):
+def query_gpt_with_context_and_memory(user_query, df, index, model, history, top_k=6):
     clean_query = preprocess_text(user_query)
     if is_greeting(clean_query):
         return random.choice([
@@ -149,31 +171,20 @@ def query_openai_with_memory(user_query, df, index, model, history, top_k=5):
     context_blocks = [df.iloc[i]['text'] for i in I[0] if i < len(df)]
     context_string = "\n\n".join(context_blocks)
 
-    messages = generate_prompt_with_memory(history, context_string, user_query)
+    summary, recent_history = summarize_history(history)
+    messages = generate_prompt_with_memory(recent_history, context_string, user_query, summary)
 
-    # Try GPT-4 Turbo, fallback to GPT-3.5 Turbo on failure
-    for model_name in ["gpt-4o-mini", "gpt-3.5-turbo"]:
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0.3,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            # Log error but try next model
-            st.warning(f"⚠️ Model {model_name} failed: {e}")
-            continue
-    return "❌ Sorry, I'm unable to process your request at the moment."
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content.strip() if response.choices else "⚠️ No response generated."
+    except Exception as e:
+        return f"❌ GPT API Error: {str(e)}"
 
-def get_related_questions(user_query, df, index, model, top_k=5):
-    clean_query = preprocess_text(user_query)
-    query_embedding = model.encode([clean_query])
-    D, I = index.search(np.array(query_embedding), top_k)
-    return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
-
-# --- Streamlit UI ---
-
+# --- UI Setup ---
 st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
 df = load_data()
@@ -181,11 +192,10 @@ model = load_model()
 
 if "history" not in st.session_state:
     st.session_state.history = []
-
 if "related_questions" not in st.session_state:
     st.session_state.related_questions = []
 
-# Sidebar filters & clear chat button
+# Sidebar
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
     if st.button("🗑️ Clear Chat"):
@@ -198,17 +208,26 @@ with st.sidebar:
     selected_department = st.selectbox("Department", ["All"] + sorted(df["department"].dropna().unique().tolist()))
     selected_level = st.selectbox("Level", ["All"] + sorted(df["level"].dropna().unique().tolist()))
     selected_semester = st.selectbox("Semester", ["All"] + sorted(df["semester"].dropna().unique().tolist()))
+    
+    if st.button("Clear Filters"):
+        selected_faculty = "All"
+        selected_department = "All"
+        selected_level = "All"
+        selected_semester = "All"
+        st.experimental_rerun()
 
-# Display chat history
+# Display Chat with timestamps
 st.title("🎓 Crescent University Chatbot")
-for chat in st.session_state.history:
-    if chat["role"] == "user":
-        st.chat_message("user").write(chat["content"])
-    else:
-        st.chat_message("assistant").write(chat["content"])
 
-# Input area
-user_input = st.chat_input("Ask your question:")
+for chat in st.session_state.history:
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    if chat["role"] == "user":
+        st.chat_message("user").write(f"{chat['content']}  \n*{timestamp}*")
+    else:
+        st.chat_message("assistant").write(f"{chat['content']}  \n*{timestamp}*")
+
+# Chat input
+user_input = st.chat_input("Ask your question...")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
@@ -216,26 +235,21 @@ if user_input:
     filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
 
     if not filtered_df.empty:
-        # Cache embeddings & index per filter combination
-        cache_key = f"{selected_faculty}_{selected_department}_{selected_level}_{selected_semester}"
-        if "embedding_cache" not in st.session_state:
-            st.session_state.embedding_cache = {}
-        if "index_cache" not in st.session_state:
-            st.session_state.index_cache = {}
+        filtered_embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+        index = build_faiss_index(filtered_embeddings)
 
-        if cache_key not in st.session_state.embedding_cache:
-            embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-            st.session_state.embedding_cache[cache_key] = embeddings
-            st.session_state.index_cache[cache_key] = build_faiss_index(embeddings)
+        # Typing indicator
+        with st.chat_message("assistant", avatar="🤖"):
+            placeholder = st.empty()
+            placeholder.markdown("Typing...")
+            # Simulate minimal delay for typing effect
+            time.sleep(0.7)
 
-        embeddings = st.session_state.embedding_cache[cache_key]
-        index = st.session_state.index_cache[cache_key]
+            response = query_gpt_with_context_and_memory(user_input, filtered_df, index, model, st.session_state.history)
+            placeholder.markdown(response)
 
-        # Query with memory
-        response = query_openai_with_memory(user_input, filtered_df, index, model, st.session_state.history)
         st.session_state.history.append({"role": "bot", "content": response})
 
-        # Update related questions
         related = get_related_questions(user_input, filtered_df, index, model)
         st.session_state.related_questions = related
     else:
@@ -244,18 +258,25 @@ if user_input:
             "content": "⚠️ No matching data found for the selected filters."
         })
 
-# Related questions buttons
+# Related questions UI - buttons in 3 columns
 if st.session_state.related_questions:
     st.subheader("🔍 Related Questions:")
-    for q in st.session_state.related_questions:
-        if st.button(q):
+    cols = st.columns(3)
+    for i, q in enumerate(st.session_state.related_questions):
+        if cols[i % 3].button(q):
             st.session_state.history.append({"role": "user", "content": q})
             filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
             if not filtered_df.empty:
-                cache_key = f"{selected_faculty}_{selected_department}_{selected_level}_{selected_semester}"
-                embeddings = st.session_state.embedding_cache.get(cache_key) or model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-                index = st.session_state.index_cache.get(cache_key) or build_faiss_index(embeddings)
+                filtered_embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+                index = build_faiss_index(filtered_embeddings)
+                # Typing indicator for related question response
+                with st.chat_message("assistant", avatar="🤖"):
+                    placeholder = st.empty()
+                    placeholder.markdown("Typing...")
+                    time.sleep(0.7)
+                    response = query_gpt_with_context_and_memory(q, filtered_df, index, model, st.session_state.history)
+                    placeholder.markdown(response)
 
-                response = query_openai_with_memory(q, filtered_df, index, model, st.session_state.history)
                 st.session_state.history.append({"role": "bot", "content": response})
-
+            else:
+                st.session_state.history.append({"role": "bot", "content": "⚠️ No matching data found for the selected filters."})
