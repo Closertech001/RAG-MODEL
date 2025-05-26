@@ -11,10 +11,10 @@ import pkg_resources
 import random
 import openai
 
-# PAGE CONFIG — MUST BE FIRST
+# PAGE CONFIG - MUST BE FIRST
 st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
-# CUSTOM CSS & FONTS
+# Inject CSS for styling chat bubbles, related questions, fonts etc.
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
 <style>
@@ -60,35 +60,23 @@ st.markdown("""
         font-weight: bold;
     }
 </style>
-<script>
-    const scrollToBottom = () => {
-        const chatContainer = window.parent.document.querySelector('.element-container div[data-testid="stVerticalBlock"]');
-        if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-    };
-    window.addEventListener("load", scrollToBottom);
-</script>
 """, unsafe_allow_html=True)
 
-# --- API Key ---
+# Setup OpenAI API Key
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# --- SymSpell Setup ---
+# Initialize SymSpell for spell correction and abbreviations
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
 
 abbreviations = {
-    "u": "you", "r": "are", "ur": "your", "ow": "how", "pls": "please", "plz": "please",
-    "tmrw": "tomorrow", "cn": "can", "wat": "what", "cud": "could", "shud": "should",
-    "wud": "would", "abt": "about", "bcz": "because", "bcoz": "because", "btw": "between",
-    "asap": "as soon as possible", "idk": "i don't know", "imo": "in my opinion",
+    "u": "you", "r": "are", "ur": "your", "pls": "please", "tmrw": "tomorrow",
+    "cn": "can", "wat": "what", "cud": "could", "shud": "should", "wud": "would",
+    "abt": "about", "bcz": "because", "btw": "between", "idk": "i don't know",
     "msg": "message", "doc": "document", "d": "the", "yr": "year", "sem": "semester",
     "dept": "department", "admsn": "admission", "cresnt": "crescent", "uni": "university",
-    "clg": "college", "sch": "school", "info": "information", "l": "level", 
-    "CSC": "Computer Science", "ECO": "Economics with Operations Research", 
-    "PHY": "Physics", "STAT": "Statistics", "1st": "First", "2nd": "Second"
+    "clg": "college", "sch": "school", "info": "information", "l": "level"
 }
 
 def normalize_text(text):
@@ -107,10 +95,7 @@ def preprocess_text(text):
     return ' '.join(corrected)
 
 def is_greeting(text):
-    greetings = [
-        "hi", "hello", "hey", "hi there", "greetings", "how are you", "how are you doing",
-        "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"
-    ]
+    greetings = ["hi", "hello", "hey", "hi there", "how are you", "greetings"]
     return text.lower().strip() in greetings
 
 @st.cache_data
@@ -119,29 +104,14 @@ def load_data():
         with open("qa_dataset.json", "r", encoding="utf-8") as f:
             raw_data = json.load(f)
     except Exception as e:
-        st.error(f"❌ Failed to load qa_dataset.json: {e}")
+        st.error(f"Failed to load qa_dataset.json: {e}")
         st.stop()
-
     rag_data = []
     for entry in raw_data:
-        question = entry.get("question", "").strip()
-        answer = entry.get("answer", "").strip()
-        department = entry.get("department", "").strip()
-        level = entry.get("level", "").strip()
-        semester = entry.get("semester", "").strip()
-        faculty = entry.get("faculty", "").strip()
-
-        if question and answer:
-            combined_text = f"Q: {question}\nA: {answer}"
-            rag_data.append({
-                "text": combined_text,
-                "question": question,
-                "answer": answer,
-                "department": department,
-                "level": level,
-                "semester": semester,
-                "faculty": faculty
-            })
+        rag_data.append({
+            "text": f"Q: {entry['question']}\nA: {entry['answer']}",
+            **entry
+        })
     return pd.DataFrame(rag_data)
 
 @st.cache_resource
@@ -154,6 +124,28 @@ def build_faiss_index(embeddings):
     index.add(embeddings)
     return index
 
+def fallback_openai(user_input, context_qa=None):
+    system_prompt = "You are a helpful assistant specialized in Crescent University."
+    messages = [{"role": "system", "content": system_prompt}]
+    if context_qa:
+        messages.append({"role": "user", "content": f"{context_qa['question']}\n{context_qa['answer']}\n\nAnswer: {user_input}"})
+    else:
+        messages.append({"role": "user", "content": user_input})
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo", messages=messages, temperature=0.3
+        )
+        return response.choices[0].message["content"].strip()
+    except Exception as e:
+        print("OpenAI Error:", e)
+        return "Sorry, I couldn't reach the server. Try again later."
+
+def get_related_questions(user_query, df, index, model, top_k=5):
+    clean_query = preprocess_text(user_query)
+    query_embedding = model.encode([clean_query])
+    D, I = index.search(np.array(query_embedding), top_k)
+    return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
+
 def apply_filters(df, faculty, department, level, semester):
     if faculty != "All":
         df = df[df["faculty"] == faculty]
@@ -165,35 +157,7 @@ def apply_filters(df, faculty, department, level, semester):
         df = df[df["semester"] == semester]
     return df
 
-def fallback_openai(user_input, context_qa=None):
-    system_prompt = (
-        "You are a helpful assistant specialized in Crescent University information. "
-        "If you don't know an answer, politely say so and refer to university resources."
-    )
-    messages = [{"role": "system", "content": system_prompt}]
-    if context_qa:
-        user_message = f"Q: {context_qa['question']}\nA: {context_qa['answer']}\n\nUser: {user_input}"
-    else:
-        user_message = user_input
-
-    messages.append({"role": "user", "content": user_message})
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.3
-        )
-        return response.choices[0].message["content"].strip()
-    except Exception:
-        return "Sorry, I couldn't reach the server. Try again later."
-
-def get_related_questions(user_query, df, index, model, top_k=5):
-    clean_query = preprocess_text(user_query)
-    query_embedding = model.encode([clean_query])
-    D, I = index.search(np.array(query_embedding), top_k)
-    return [df.iloc[i]['question'] for i in I[0] if i < len(df)]
-
-# --- Initialization ---
+# Load resources
 df = load_data()
 model = load_model()
 
@@ -206,7 +170,7 @@ if "embedding_cache" not in st.session_state:
 if "faiss_index_cache" not in st.session_state:
     st.session_state.faiss_index_cache = {}
 
-# --- Sidebar ---
+# Sidebar for filters & clear chat
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
     if st.button("🗑️ Clear Chat"):
@@ -220,24 +184,43 @@ with st.sidebar:
     selected_level = st.selectbox("Level", ["All"] + sorted(df["level"].dropna().unique().tolist()))
     selected_semester = st.selectbox("Semester", ["All"] + sorted(df["semester"].dropna().unique().tolist()))
 
-# --- Main Area ---
+# Main title
 st.title("🎓 Crescent University Chatbot")
 
-for chat in st.session_state.history:
-    msg_class = "chat-message-user" if chat["role"] == "user" else "chat-message-assistant"
-    st.markdown(f'<div class="{msg_class}">{chat["content"]}</div>', unsafe_allow_html=True)
+# Container for chat messages
+chat_container = st.container()
 
+def render_chat():
+    with chat_container:
+        for chat in st.session_state.history:
+            cls = "chat-message-user" if chat["role"] == "user" else "chat-message-assistant"
+            st.markdown(f"<div class='{cls}'>{chat['content']}</div>", unsafe_allow_html=True)
+        # Invisible div for autoscroll target
+        st.markdown("<div id='scroll-target'></div>", unsafe_allow_html=True)
+        # Inject JS to scroll to bottom
+        st.markdown(
+            """
+            <script>
+                const element = document.getElementById('scroll-target');
+                if (element) {
+                    element.scrollIntoView({behavior: 'smooth'});
+                }
+            </script>
+            """, unsafe_allow_html=True)
+
+render_chat()
+
+# Chat input
 user_input = st.chat_input("Ask your question:")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
+
     if is_greeting(user_input):
         reply = random.choice([
-            "Hello! How can I assist you today? 😊",
-            "Hi there! Ask me anything about Crescent University.",
-            "Welcome! I'm here to help with any university-related question."
+            "Hi! How can I help you?",
+            "Hello! Ask me anything about Crescent University."
         ])
-        st.session_state.history.append({"role": "assistant", "content": reply})
     else:
         filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
         cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
@@ -247,42 +230,26 @@ if user_input:
             st.session_state.embedding_cache[cache_key] = embeddings
             st.session_state.faiss_index_cache[cache_key] = build_faiss_index(embeddings)
 
-        embeddings = st.session_state.embedding_cache[cache_key]
         index = st.session_state.faiss_index_cache[cache_key]
+        query_embedding = model.encode([preprocess_text(user_input)], convert_to_numpy=True)
+        D, I = index.search(query_embedding, 1)
+        best_idx = I[0][0]
+        context_qa = {
+            "question": filtered_df.iloc[best_idx]["question"],
+            "answer": filtered_df.iloc[best_idx]["answer"]
+        }
+        reply = fallback_openai(user_input, context_qa)
 
-        if len(filtered_df) > 0:
-            query_embedding = model.encode([preprocess_text(user_input)], convert_to_numpy=True)
-            D, I = index.search(query_embedding, 1)
-            best_idx = I[0][0]
-            context_qa = {
-                "question": filtered_df.iloc[best_idx]["question"],
-                "answer": filtered_df.iloc[best_idx]["answer"]
-            }
-            response = fallback_openai(user_input, context_qa)
-            st.session_state.history.append({"role": "assistant", "content": response})
-            st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
-        else:
-            st.session_state.history.append({
-                "role": "assistant",
-                "content": "⚠️ No matching data found for the selected filters."
-            })
+        st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
 
-# --- Related Questions ---
+    st.session_state.history.append({"role": "assistant", "content": reply})
+    # Rerun to display updated chat and scroll
+    st.experimental_rerun()
+
+# Show related questions
 if st.session_state.related_questions:
     st.subheader("🔍 Related Questions:")
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
-            filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-            if not filtered_df.empty:
-                cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
-                index = st.session_state.faiss_index_cache[cache_key]
-                query_embedding = model.encode([preprocess_text(q)], convert_to_numpy=True)
-                D, I = index.search(query_embedding, 1)
-                best_idx = I[0][0]
-                context_qa = {
-                    "question": filtered_df.iloc[best_idx]["question"],
-                    "answer": filtered_df.iloc[best_idx]["answer"]
-                }
-                response = fallback_openai(q, context_qa)
-                st.session_state.history.append({"role": "assistant", "content": response})
+            st.experimental_rerun()
