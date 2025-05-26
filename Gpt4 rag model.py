@@ -1,177 +1,66 @@
-# --- imports ---
 import streamlit as st
-from sentence_transformers import SentenceTransformer, util
-import pandas as pd
-import torch
-import random
-import re
-from symspellpy.symspellpy import SymSpell, Verbosity
-import pkg_resources
-import json
 import openai
+import pandas as pd
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from textblob import TextBlob
+import re
+import string
 import os
-import hashlib
+from dotenv import load_dotenv
+load_dotenv()
 
-# --- API Key Setup ---
+# Load environment variables
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# --- SymSpell Setup ---
-sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
-dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
-sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
-
-# --- Abbreviations and Department Mapping ---
-abbreviations = {
-    "u": "you", "r": "are", "ur": "your", "ow": "how", "pls": "please", "plz": "please",
-    "tmrw": "tomorrow", "cn": "can", "wat": "what", "cud": "could", "shud": "should",
-    "wud": "would", "abt": "about", "bcz": "because", "btw": "between", "asap": "as soon as possible",
-    "idk": "i don't know", "imo": "in my opinion", "msg": "message", "doc": "document", "d": "the",
-    "yr": "year", "sem": "semester", "dept": "department", "admsn": "admission",
-    "cresnt": "crescent", "uni": "university", "clg": "college", "sch": "school",
-    "info": "information", "l": "level", "CSC": "Computer Science", "ECO": "Economics with Operations Research",
-    "PHY": "Physics", "STAT": "Statistics", "1st": "First", "2nd": "Second"
+# --- Abbreviation Expansion ---
+abbreviation_dict = {
+    "cuab": "crescent university",
+    "vc": "vice chancellor",
+    "asuu": "academic staff union of universities",
+    "phd": "doctor of philosophy",
+    "bsc": "bachelor of science",
+    "pgd": "postgraduate diploma",
+    "msc": "master of science",
+    "nysc": "national youth service corps"
 }
 
-department_map = {
-    "GST": "General Studies", "MTH": "Mathematics", "PHY": "Physics", "STA": "Statistics",
-    "COS": "Computer Science", "CUAB-CSC": "Computer Science", "CSC": "Computer Science",
-    "IFT": "Computer Science", "SEN": "Software Engineering", "ENT": "Entrepreneurship",
-    "CYB": "Cybersecurity", "ICT": "Information and Communication Technology",
-    "DTS": "Data Science", "CUAB-CPS": "Computer Science", "CUAB-ECO": "Economics with Operations Research",
-    "ECO": "Economics with Operations Research", "SSC": "Social Sciences", "CUAB-BCO": "Economics with Operations Research",
-    "LIB": "Library Studies", "LAW": "Law (BACOLAW)", "GNS": "General Studies", "ENG": "English",
-    "SOS": "Sociology", "PIS": "Political Science", "CPS": "Computer Science",
-    "LPI": "Law (BACOLAW)", "ICL": "Law (BACOLAW)", "LPB": "Law (BACOLAW)", "TPT": "Law (BACOLAW)",
-    "FAC": "Agricultural Sciences", "ANA": "Anatomy", "BIO": "Biological Sciences",
-    "CHM": "Chemical Sciences", "CUAB-BCH": "Biochemistry", "CUAB": "Crescent University - General"
-}
+def expand_abbreviations(text):
+    words = text.split()
+    expanded_words = [abbreviation_dict.get(word.lower(), word) for word in words]
+    return " ".join(expanded_words)
 
-# --- Text Preprocessing ---
-def normalize_text(text):
-    text = re.sub(r'([^a-zA-Z0-9\s])', '', text)
-    text = re.sub(r'(.)\1{2,}', r'\1', text)
+# --- Spell Correction using TextBlob ---
+def correct_spelling(text):
+    return str(TextBlob(text).correct())
+
+# --- Preprocessing ---
+def preprocess(text):
+    text = expand_abbreviations(text)
+    text = correct_spelling(text)
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
     return text
 
-def preprocess_text(text):
-    text = normalize_text(text)
-    words = text.split()
-    expanded = [abbreviations.get(word.lower(), word) for word in words]
-    corrected = []
-    for word in expanded:
-        suggestions = sym_spell.lookup(word, Verbosity.CLOSEST, max_edit_distance=2)
-        corrected.append(suggestions[0].term if suggestions else word)
-    return ' '.join(corrected)
-
-def extract_prefix(code):
-    match = re.match(r"([A-Z\-]+)", code)
-    return match.group(1) if match else None
-
-# --- Model & Data Load ---
+# --- Embedding Model ---
 @st.cache_resource
 def load_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
 
+model = load_model()
+
+# --- Load dataset and precompute embeddings ---
 @st.cache_data
-def load_data():
-    with open("qa_dataset.json", "r", encoding="utf-8") as f:
-        raw_data = json.load(f)
+def load_data_and_embeddings():
+    df = pd.read_csv("crescent_data.csv")
+    df["question_clean"] = df["question"].apply(preprocess)
+    df["embedding"] = df["question_clean"].apply(lambda q: model.encode(q, convert_to_tensor=True).cpu().numpy())
+    return df
 
-    rag_data = []
-    for entry in raw_data:
-        question = entry.get("question", "").strip()
-        answer = entry.get("answer", "").strip()
-        department = entry.get("department", "").strip()
-        level = entry.get("level", "").strip()
-        semester = entry.get("semester", "").strip()
-        faculty = entry.get("faculty", "").strip()
+dataset = load_data_and_embeddings()
 
-        if question and answer:
-            rag_data.append({
-                "text": f"Q: {question}\nA: {answer}",
-                "question": question,
-                "answer": answer,
-                "department": department,
-                "level": level,
-                "semester": semester,
-                "faculty": faculty
-            })
-
-    return pd.DataFrame(rag_data)
-
-@st.cache_data
-def compute_question_embeddings(questions: list):
-    model = load_model()
-    return model.encode(questions, convert_to_tensor=True)
-
-# --- OpenAI fallback ---
-def fallback_openai(user_input, context_qa=None):
-    system_prompt = (
-        "You are a helpful assistant specialized in Crescent University information. "
-        "If you don't know an answer, politely say so and refer to university resources."
-    )
-    messages = [{"role": "system", "content": system_prompt}]
-
-    if context_qa:
-        context_text = f"Here is some relevant university information:\nQ: {context_qa['question']}\nA: {context_qa['answer']}\n\n"
-        user_message = context_text + "Answer this question: " + user_input
-    else:
-        user_message = user_input
-
-    messages.append({"role": "user", "content": user_message})
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.3
-        )
-        return response.choices[0].message["content"].strip()
-    except Exception:
-        return "Sorry, I couldn't reach the server. Try again later."
-
-# --- Response Finder ---
-def find_response(user_input, dataset, embeddings, threshold=0.4):
-    model = load_model()
-    user_input_clean = preprocess_text(user_input)
-
-    greetings = ["hi", "hello", "hey", "hi there", "greetings", "how are you",
-                 "how are you doing", "how's it going", "can we talk?",
-                 "can we have a conversation?", "okay", "i'm fine", "i am fine"]
-    if user_input_clean.lower() in greetings:
-        return random.choice(["Hello!", "Hi there!", "Hey!", "Greetings!","I'm doing well, thank you!", "Sure pal", "Okay", "I'm fine, thank you"]), None, 1.0, []
-
-    user_embedding = model.encode(user_input_clean, convert_to_tensor=True)
-    cos_scores = util.pytorch_cos_sim(user_embedding, embeddings)[0]
-    top_scores, top_indices = torch.topk(cos_scores, k=5)
-
-    top_score = top_scores[0].item()
-    top_index = top_indices[0].item()
-
-    if top_score < threshold:
-        context_qa = {
-            "question": dataset.iloc[top_index]["question"],
-            "answer": dataset.iloc[top_index]["answer"]
-        }
-        gpt_reply = fallback_openai(user_input, context_qa)
-        return gpt_reply, None, top_score, []
-
-    response = dataset.iloc[top_index]["answer"]
-    question = dataset.iloc[top_index]["question"]
-    related_questions = [dataset.iloc[i.item()]["question"] for i in top_indices[1:]]
-
-    match = re.search(r"\b([A-Z]{2,}-?\d{3,})\b", question)
-    department = None
-    if match:
-        code = match.group(1)
-        prefix = extract_prefix(code)
-        department = department_map.get(prefix, "Unknown")
-
-    if random.random() < 0.2:
-        response = random.choice(["I think ", "Maybe: ", "Possibly: ", "Here's what I found: "]) + response
-
-    return response, department, top_score, related_questions
-
-# --- Apply Filters Function ---
+# --- Filter Function ---
 def apply_filters(df, faculty, department, level, semester):
     if faculty != "All":
         df = df[df["faculty"] == faculty]
@@ -183,21 +72,47 @@ def apply_filters(df, faculty, department, level, semester):
         df = df[df["semester"] == semester]
     return df
 
+# --- GPT Fallback ---
+def gpt_fallback(prompt, model_name="gpt-3.5-turbo"):
+    try:
+        response = openai.ChatCompletion.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant for Crescent University."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message['content'].strip()
+    except Exception as e:
+        return f"Error contacting GPT model: {e}"
+
+# --- Similar Question Finder ---
+def find_similar_responses(user_question, data):
+    user_question_processed = preprocess(user_question)
+    user_embedding = model.encode(user_question_processed, convert_to_tensor=True).cpu().numpy()
+
+    embeddings = np.stack(data["embedding"].values)
+    similarities = cosine_similarity([user_embedding], embeddings)[0]
+
+    top_indices = similarities.argsort()[::-1][:3]
+    top_scores = similarities[top_indices]
+
+    if top_scores[0] >= 0.75:
+        responses = [(data.iloc[i]["question"], data.iloc[i]["answer"], data.iloc[i]["department"]) for i in top_indices]
+        return responses, top_scores
+    else:
+        return [], top_scores
+
 # --- Streamlit UI ---
-st.set_page_config(page_title="Crescent University Chatbot", page_icon="🎓")
+st.set_page_config(page_title="Crescent University Chatbot", layout="wide")
+st.title("🎓 Crescent University Q&A Chatbot")
 
-# --- Load once ---
-model = load_model()
-dataset = load_data()
-
-# --- Sidebar ---
+# Sidebar
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
     if st.button("🧹 Clear Chat"):
         st.session_state.chat_history = []
-        st.session_state.related_questions = []
-        st.session_state.last_department = None
-        st.experimental_rerun()
+        st.rerun()
 
     st.subheader("📚 Filters")
     selected_faculty = st.selectbox("Faculty", ["All"] + sorted(dataset["faculty"].dropna().unique().tolist()))
@@ -206,38 +121,50 @@ with st.sidebar:
     selected_semester = st.selectbox("Semester", ["All"] + sorted(dataset["semester"].dropna().unique().tolist()))
 
     st.subheader("⚙️ Model")
-    model_choice = st.radio("Choose model", ["gpt-3.5-turbo", "gpt-4"], index=1)
+    model_choice = st.radio("Choose model", ["gpt-3.5-turbo", "gpt-4"], index=0)
 
-# --- Filter the dataset based on selections ---
-filtered_dataset = apply_filters(dataset, selected_faculty, selected_department, selected_level, selected_semester)
-filtered_questions = filtered_dataset["question"].tolist()
-
-# --- Compute embeddings for filtered questions ---
-question_embeddings = compute_question_embeddings(filtered_questions)
-
-# --- Session state ---
+# Session State
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "related_questions" not in st.session_state:
-    st.session_state.related_questions = []
-if "last_department" not in st.session_state:
-    st.session_state.last_department = None
 
-# --- Chat interface ---
-st.title("🎓 Crescent University Chatbot")
-user_input = st.text_input("Ask me anything about Crescent University:")
+# Input
+prompt = st.chat_input("Ask a question about Crescent University:")
 
-if user_input:
-    response, department, score, related_qs = find_response(user_input, filtered_dataset.reset_index(drop=True), question_embeddings)
-    st.session_state.chat_history.append({"user": user_input, "bot": response})
-    st.session_state.related_questions = related_qs
-    st.session_state.last_department = department
+if prompt:
+    filtered_data = apply_filters(dataset, selected_faculty, selected_department, selected_level, selected_semester)
 
-for chat in st.session_state.chat_history:
-    st.markdown(f"**You:** {chat['user']}")
-    st.markdown(f"**Bot:** {chat['bot']}")
+    if filtered_data.empty:
+        answer = "No data matches the selected filters. Please adjust them and try again."
+    else:
+        responses, scores = find_similar_responses(prompt, filtered_data)
 
-if st.session_state.related_questions:
-    st.subheader("Related questions:")
-    for q in st.session_state.related_questions:
-        st.markdown(f"- {q}")
+        if responses:
+            main_answer = responses[0][1]
+            related_qs = [r[0] for r in responses[1:]]
+        else:
+            main_answer = gpt_fallback(prompt, model_choice)
+            related_qs = []
+
+    st.session_state.chat_history.append((prompt, main_answer, related_qs))
+
+# Display Chat
+with st.container():
+    for user_input, response, related in reversed(st.session_state.chat_history):
+        st.markdown(f"**🧑 You:** {user_input}")
+        st.markdown(f"**🤖 Bot:** {response}")
+        if related:
+            with st.expander("Related Questions"):
+                for q in related:
+                    if st.button(q, key=q):
+                        sub_responses, _ = find_similar_responses(q, apply_filters(dataset, selected_faculty, selected_department, selected_level, selected_semester))
+                        if sub_responses:
+                            answer = sub_responses[0][1]
+                        else:
+                            answer = gpt_fallback(q, model_choice)
+                        st.session_state.chat_history.append((q, answer, []))
+                        st.rerun()
+        st.markdown("---")
+
+# Footer
+st.markdown("---")
+st.markdown("Built with ❤️ using Streamlit, OpenAI, and SentenceTransformers")
