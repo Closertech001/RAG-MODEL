@@ -10,6 +10,61 @@ from symspellpy.symspellpy import SymSpell, Verbosity
 import pkg_resources
 import random
 import openai
+import streamlit.components.v1 as components
+
+# --- Custom Styling ---
+st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
+<style>
+    html, body, .stApp {
+        font-family: 'Open Sans', sans-serif;
+    }
+    h1, h2, h3, h4, h5 {
+        font-family: 'Merriweather', serif;
+        color: #004080;
+    }
+    .chat-message-user {
+        background-color: #d6eaff;
+        padding: 12px;
+        border-radius: 15px;
+        margin-bottom: 10px;
+        margin-left: auto;
+        max-width: 75%;
+        font-weight: 550;
+        color: #000;
+    }
+    .chat-message-assistant {
+        background-color: #f5f5f5;
+        padding: 12px;
+        border-radius: 15px;
+        margin-bottom: 10px;
+        margin-right: auto;
+        max-width: 75%;
+        font-weight: 600;
+        color: #000;
+    }
+    .related-question {
+        background-color: #e6f2ff;
+        padding: 8px 12px;
+        margin: 6px 6px 6px 0;
+        display: inline-block;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        cursor: pointer;
+    }
+    .sidebar .stButton>button {
+        background-color: #004080 !important;
+        color: white !important;
+        font-weight: bold;
+    }
+    .department-label {
+        font-family: 'Merriweather', serif;
+        font-size: 0.85rem;
+        color: #004080;
+        font-style: italic;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- API Key ---
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -32,7 +87,7 @@ abbreviations = {
     "PHY": "Physics", "STAT": "Statistics", "1st": "First", "2nd": "Second"
 }
 
-# --- Text normalization and preprocessing ---
+# --- Preprocessing ---
 def normalize_text(text):
     text = re.sub(r'([^a-zA-Z0-9\s])', '', text)
     text = re.sub(r'(.)\1{2,}', r'\1', text)
@@ -54,11 +109,6 @@ def is_greeting(text):
         "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"
     ]
     return text.lower().strip() in greetings
-
-def normalize_filter_value(value):
-    if value == "All":
-        return "All"
-    return value.strip()
 
 # --- Data Loading ---
 @st.cache_data
@@ -179,6 +229,19 @@ st.title("🎓 Crescent University Chatbot")
 for chat in st.session_state.history:
     st.chat_message(chat["role"]).write(chat["content"])
 
+# --- Auto-scroll to the latest message ---
+components.html(
+    """
+    <script>
+        const chatContainer = window.parent.document.querySelector('.block-container');
+        if (chatContainer) {
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+        }
+    </script>
+    """,
+    height=0,
+)
+
 user_input = st.chat_input("Ask your question:")
 
 if user_input:
@@ -192,32 +255,22 @@ if user_input:
         ])
         st.session_state.history.append({"role": "assistant", "content": greeting_reply})
     else:
-        f_faculty = normalize_filter_value(selected_faculty)
-        f_department = normalize_filter_value(selected_department)
-        f_level = normalize_filter_value(selected_level)
-        f_semester = normalize_filter_value(selected_semester)
+        filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
+        cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
 
-        filtered_df = apply_filters(df, f_faculty, f_department, f_level, f_semester)
-
-        if filtered_df.empty:
-            st.session_state.history.append({"role": "assistant", "content": "⚠️ No matching data found for the selected filters."})
+        if cache_key not in st.session_state.embedding_cache:
+            embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+            st.session_state.embedding_cache[cache_key] = embeddings
+            st.session_state.faiss_index_cache[cache_key] = build_faiss_index(embeddings)
         else:
-            cache_key = (f_faculty, f_department, f_level, f_semester)
+            embeddings = st.session_state.embedding_cache[cache_key]
 
-            if cache_key not in st.session_state.embedding_cache:
-                with st.spinner("Encoding and indexing..."):
-                    embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-                    st.session_state.embedding_cache[cache_key] = embeddings
-                    st.session_state.faiss_index_cache[cache_key] = build_faiss_index(embeddings)
-            else:
-                embeddings = st.session_state.embedding_cache[cache_key]
+        index = st.session_state.faiss_index_cache[cache_key]
 
-            index = st.session_state.faiss_index_cache[cache_key]
-
+        if len(filtered_df) > 0:
             query_embedding = model.encode([preprocess_text(user_input)], convert_to_numpy=True)
             D, I = index.search(query_embedding, 1)
             best_idx = I[0][0]
-
             context_qa = {
                 "question": filtered_df.iloc[best_idx]["question"],
                 "answer": filtered_df.iloc[best_idx]["answer"]
@@ -225,55 +278,31 @@ if user_input:
             response = fallback_openai(user_input, context_qa)
             st.session_state.history.append({"role": "assistant", "content": response})
             st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
-            
-            # Rerun to immediately reflect new messages in UI
-            st.experimental_rerun()
+        else:
+            st.session_state.history.append({
+                "role": "assistant",
+                "content": "⚠️ No matching data found for the selected filters."
+            })
 
-# --- Related Questions Section ---
+# --- Related Questions ---
 if st.session_state.related_questions:
     st.subheader("🔍 Related Questions:")
     for q in st.session_state.related_questions:
-        if st.button(q, key=f"rel_q_{q}"):
+        if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
-
-            # Normalize filters again
-            f_faculty = normalize_filter_value(selected_faculty)
-            f_department = normalize_filter_value(selected_department)
-            f_level = normalize_filter_value(selected_level)
-            f_semester = normalize_filter_value(selected_semester)
-
-            # Apply filters on dataframe
-            filtered_df = apply_filters(df, f_faculty, f_department, f_level, f_semester)
-
+            filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
             if filtered_df.empty:
-                st.session_state.history.append({"role": "assistant", "content": "⚠️ No data available for these filters."})
+                st.session_state.history.append({"role": "assistant", "content": "No data available."})
             else:
-                cache_key = (f_faculty, f_department, f_level, f_semester)
-
-                # Retrieve embeddings and index or build if missing
-                if cache_key not in st.session_state.embedding_cache or cache_key not in st.session_state.faiss_index_cache:
-                    with st.spinner("Encoding and building index..."):
-                        embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-                        st.session_state.embedding_cache[cache_key] = embeddings
-                        index = build_faiss_index(embeddings)
-                        st.session_state.faiss_index_cache[cache_key] = index
-                else:
-                    embeddings = st.session_state.embedding_cache[cache_key]
-                    index = st.session_state.faiss_index_cache[cache_key]
-
-                # Search best matching Q&A for the related question clicked
-                with st.spinner("Searching for answer..."):
-                    query_embedding = model.encode([preprocess_text(q)], convert_to_numpy=True)
-                    D, I = index.search(query_embedding, 1)
-                    best_idx = I[0][0]
-
+                cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
+                embeddings = st.session_state.embedding_cache[cache_key]
+                index = st.session_state.faiss_index_cache[cache_key]
+                query_embedding = model.encode([preprocess_text(q)], convert_to_numpy=True)
+                D, I = index.search(query_embedding, 1)
+                best_idx = I[0][0]
                 context_qa = {
                     "question": filtered_df.iloc[best_idx]["question"],
                     "answer": filtered_df.iloc[best_idx]["answer"]
                 }
-                with st.spinner("Generating response..."):
-                    response = fallback_openai(q, context_qa)
+                response = fallback_openai(q, context_qa)
                 st.session_state.history.append({"role": "assistant", "content": response})
-
-            # Rerun to update chat UI with new messages
-            st.experimental_rerun()
