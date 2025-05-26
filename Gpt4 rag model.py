@@ -176,8 +176,7 @@ with st.sidebar:
     if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
-        st.experimental_rerun()
-
+        # No rerun needed, Streamlit handles it
     st.subheader("📚 Filters")
     selected_faculty = st.selectbox("Faculty", ["All"] + sorted(df["faculty"].dropna().unique().tolist()))
     selected_department = st.selectbox("Department", ["All"] + sorted(df["department"].dropna().unique().tolist()))
@@ -215,10 +214,6 @@ user_input = st.chat_input("Ask your question:")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
-    # ... processing to get reply
-    st.session_state.history.append({"role": "assistant", "content": reply})
-
-    # Instead of rerun, just rely on Streamlit reactivity — so remove st.experimental_rerun()
 
     if is_greeting(user_input):
         reply = random.choice([
@@ -238,6 +233,7 @@ if user_input:
         query_embedding = model.encode([preprocess_text(user_input)], convert_to_numpy=True)
         D, I = index.search(query_embedding, 1)
         best_idx = I[0][0]
+
         context_qa = {
             "question": filtered_df.iloc[best_idx]["question"],
             "answer": filtered_df.iloc[best_idx]["answer"]
@@ -247,8 +243,6 @@ if user_input:
         st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
 
     st.session_state.history.append({"role": "assistant", "content": reply})
-    # Rerun to display updated chat and scroll
-    st.experimental_rerun()
 
 # Show related questions
 if st.session_state.related_questions:
@@ -256,4 +250,5 @@ if st.session_state.related_questions:
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
-            st.experimental_rerun()
+            # No st.experimental_rerun() needed
+
