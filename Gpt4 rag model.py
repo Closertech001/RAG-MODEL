@@ -53,7 +53,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # API KEY
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 # Spell Correction Setup
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
