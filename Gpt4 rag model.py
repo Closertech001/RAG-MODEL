@@ -32,7 +32,7 @@ abbreviations = {
     "PHY": "Physics", "STAT": "Statistics", "1st": "First", "2nd": "Second"
 }
 
-# --- Preprocessing ---
+# --- Text normalization and preprocessing ---
 def normalize_text(text):
     text = re.sub(r'([^a-zA-Z0-9\s])', '', text)
     text = re.sub(r'(.)\1{2,}', r'\1', text)
@@ -54,6 +54,11 @@ def is_greeting(text):
         "how's it going", "can we talk?", "can we have a conversation?", "okay", "i'm fine", "i am fine"
     ]
     return text.lower().strip() in greetings
+
+def normalize_filter_value(value):
+    if value == "All":
+        return "All"
+    return value.strip()
 
 # --- Data Loading ---
 @st.cache_data
@@ -187,22 +192,32 @@ if user_input:
         ])
         st.session_state.history.append({"role": "assistant", "content": greeting_reply})
     else:
-        filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-        cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
+        f_faculty = normalize_filter_value(selected_faculty)
+        f_department = normalize_filter_value(selected_department)
+        f_level = normalize_filter_value(selected_level)
+        f_semester = normalize_filter_value(selected_semester)
 
-        if cache_key not in st.session_state.embedding_cache:
-            embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
-            st.session_state.embedding_cache[cache_key] = embeddings
-            st.session_state.faiss_index_cache[cache_key] = build_faiss_index(embeddings)
+        filtered_df = apply_filters(df, f_faculty, f_department, f_level, f_semester)
+
+        if filtered_df.empty:
+            st.session_state.history.append({"role": "assistant", "content": "⚠️ No matching data found for the selected filters."})
         else:
-            embeddings = st.session_state.embedding_cache[cache_key]
+            cache_key = (f_faculty, f_department, f_level, f_semester)
 
-        index = st.session_state.faiss_index_cache[cache_key]
+            if cache_key not in st.session_state.embedding_cache:
+                with st.spinner("Encoding and indexing..."):
+                    embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+                    st.session_state.embedding_cache[cache_key] = embeddings
+                    st.session_state.faiss_index_cache[cache_key] = build_faiss_index(embeddings)
+            else:
+                embeddings = st.session_state.embedding_cache[cache_key]
 
-        if len(filtered_df) > 0:
+            index = st.session_state.faiss_index_cache[cache_key]
+
             query_embedding = model.encode([preprocess_text(user_input)], convert_to_numpy=True)
             D, I = index.search(query_embedding, 1)
             best_idx = I[0][0]
+
             context_qa = {
                 "question": filtered_df.iloc[best_idx]["question"],
                 "answer": filtered_df.iloc[best_idx]["answer"]
@@ -210,31 +225,52 @@ if user_input:
             response = fallback_openai(user_input, context_qa)
             st.session_state.history.append({"role": "assistant", "content": response})
             st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
-        else:
-            st.session_state.history.append({
-                "role": "assistant",
-                "content": "⚠️ No matching data found for the selected filters."
-            })
 
-# --- Related Questions ---
+# --- Related Questions Section ---
 if st.session_state.related_questions:
     st.subheader("🔍 Related Questions:")
     for q in st.session_state.related_questions:
-        if st.button(q):
+        if st.button(q, key=f"rel_q_{q}"):
             st.session_state.history.append({"role": "user", "content": q})
-            filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
+
+            # Normalize filters again
+            f_faculty = normalize_filter_value(selected_faculty)
+            f_department = normalize_filter_value(selected_department)
+            f_level = normalize_filter_value(selected_level)
+            f_semester = normalize_filter_value(selected_semester)
+
+            # Apply filters on dataframe
+            filtered_df = apply_filters(df, f_faculty, f_department, f_level, f_semester)
+
             if filtered_df.empty:
-                st.session_state.history.append({"role": "assistant", "content": "No data available."})
+                st.session_state.history.append({"role": "assistant", "content": "⚠️ No data available for these filters."})
             else:
-                cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
-                embeddings = st.session_state.embedding_cache[cache_key]
-                index = st.session_state.faiss_index_cache[cache_key]
-                query_embedding = model.encode([preprocess_text(q)], convert_to_numpy=True)
-                D, I = index.search(query_embedding, 1)
-                best_idx = I[0][0]
+                cache_key = (f_faculty, f_department, f_level, f_semester)
+
+                # Retrieve embeddings and index or build if missing
+                if cache_key not in st.session_state.embedding_cache or cache_key not in st.session_state.faiss_index_cache:
+                    with st.spinner("Encoding and building index..."):
+                        embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
+                        st.session_state.embedding_cache[cache_key] = embeddings
+                        index = build_faiss_index(embeddings)
+                        st.session_state.faiss_index_cache[cache_key] = index
+                else:
+                    embeddings = st.session_state.embedding_cache[cache_key]
+                    index = st.session_state.faiss_index_cache[cache_key]
+
+                # Search best matching Q&A for the related question clicked
+                with st.spinner("Searching for answer..."):
+                    query_embedding = model.encode([preprocess_text(q)], convert_to_numpy=True)
+                    D, I = index.search(query_embedding, 1)
+                    best_idx = I[0][0]
+
                 context_qa = {
                     "question": filtered_df.iloc[best_idx]["question"],
                     "answer": filtered_df.iloc[best_idx]["answer"]
                 }
-                response = fallback_openai(q, context_qa)
+                with st.spinner("Generating response..."):
+                    response = fallback_openai(q, context_qa)
                 st.session_state.history.append({"role": "assistant", "content": response})
+
+            # Rerun to update chat UI with new messages
+            st.experimental_rerun()
