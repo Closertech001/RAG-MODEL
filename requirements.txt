@@ -1,7 +1,7 @@
-upgrade streamlit
-pandas
-numpy
-sentence-transformers
-faiss-cpu
-symspellpy
-openai
+streamlit>=1.25.0
+pandas>=2.0.3
+numpy>=1.26.4
+sentence-transformers>=2.2.2
+faiss-cpu>=1.7.4
+symspellpy>=6.7.6
+openai>=0.27.8
