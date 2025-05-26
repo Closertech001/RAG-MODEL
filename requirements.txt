@@ -1,4 +1,4 @@
-streamlit
+upgrade streamlit
 pandas
 numpy
 sentence-transformers
