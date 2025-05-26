@@ -225,6 +225,9 @@ if user_input:
             response = fallback_openai(user_input, context_qa)
             st.session_state.history.append({"role": "assistant", "content": response})
             st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
+            
+            # Rerun to immediately reflect new messages in UI
+            st.experimental_rerun()
 
 # --- Related Questions Section ---
 if st.session_state.related_questions:
