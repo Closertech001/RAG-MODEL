@@ -233,17 +233,21 @@ user_input = st.chat_input("Ask your question:")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
+    st.chat_message("user").write(user_input)  # Add this line to show user message immediately
 
     if is_greeting(user_input):
-        reply = random.choice([
+        greeting_reply = random.choice([
             "Hello! How can I assist you today? 😊",
             "Hi there! Ask me anything about Crescent University.",
             "Welcome! I'm here to help with any university-related question."
         ])
-        st.session_state.history.append({"role": "assistant", "content": reply})
+        st.session_state.history.append({"role": "assistant", "content": greeting_reply})
+        st.chat_message("assistant").write(greeting_reply)  # Add this line to show bot reply immediately
     else:
-        filtered_df = apply_filters(df, selected_faculty, selected_department, selected_level, selected_semester)
-        cache_key = (selected_faculty, selected_department, selected_level, selected_semester)
+        ...
+        response = fallback_openai(user_input, context_qa)
+        st.session_state.history.append({"role": "assistant", "content": response})
+        st.chat_message("assistant").write(response)  # Add this line
 
         if cache_key not in st.session_state.embedding_cache:
             embeddings = model.encode(filtered_df["text"].tolist(), convert_to_numpy=True)
