@@ -232,7 +232,7 @@ if user_input:
         st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
 
     st.session_state.history.append({"role": "assistant", "content": reply})
-    st.experimental_rerun()
+    st.stop()
 
 # Show related questions
 if st.session_state.related_questions:
@@ -240,4 +240,4 @@ if st.session_state.related_questions:
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
-            st.experimental_rerun()
+            st.stop()
