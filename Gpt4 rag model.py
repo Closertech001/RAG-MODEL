@@ -11,20 +11,15 @@ import pkg_resources
 import random
 import openai
 
-# PAGE CONFIG - MUST BE FIRST
+# PAGE CONFIG
 st.set_page_config(page_title="Crescent University RAG Chatbot", page_icon="🎓", layout="wide")
 
-# Inject CSS for styling chat bubbles, related questions, fonts etc.
+# Inject CSS
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans&display=swap" rel="stylesheet">
 <style>
-    html, body, .stApp {
-        font-family: 'Open Sans', sans-serif;
-    }
-    h1, h2, h3, h4, h5 {
-        font-family: 'Merriweather', serif;
-        color: #004080;
-    }
+    html, body, .stApp { font-family: 'Open Sans', sans-serif; }
+    h1, h2, h3, h4, h5 { font-family: 'Merriweather', serif; color: #004080; }
     .chat-message-user {
         background-color: #d6eaff;
         padding: 12px;
@@ -54,18 +49,13 @@ st.markdown("""
         font-size: 0.9rem;
         cursor: pointer;
     }
-    .sidebar .stButton>button {
-        background-color: #004080 !important;
-        color: white !important;
-        font-weight: bold;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# Setup OpenAI API Key
+# API KEY
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Initialize SymSpell for spell correction and abbreviations
+# Spell Correction Setup
 sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 dictionary_path = pkg_resources.resource_filename("symspellpy", "frequency_dictionary_en_82_765.txt")
 sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
@@ -100,18 +90,11 @@ def is_greeting(text):
 
 @st.cache_data
 def load_data():
-    try:
-        with open("qa_dataset.json", "r", encoding="utf-8") as f:
-            raw_data = json.load(f)
-    except Exception as e:
-        st.error(f"Failed to load qa_dataset.json: {e}")
-        st.stop()
-    rag_data = []
-    for entry in raw_data:
-        rag_data.append({
-            "text": f"Q: {entry['question']}\nA: {entry['answer']}",
-            **entry
-        })
+    with open("qa_dataset.json", "r", encoding="utf-8") as f:
+        raw_data = json.load(f)
+    rag_data = [
+        {"text": f"Q: {entry['question']}\nA: {entry['answer']}", **entry} for entry in raw_data
+    ]
     return pd.DataFrame(rag_data)
 
 @st.cache_resource
@@ -124,16 +107,24 @@ def build_faiss_index(embeddings):
     index.add(embeddings)
     return index
 
-def fallback_openai(user_input, context_qa=None):
-    system_prompt = "You are a helpful assistant specialized in Crescent University."
+def fallback_openai(user_input, context_qa=None, model_name="gpt-4"):
+    system_prompt = "You are a helpful assistant specialized in Crescent University information. Be concise and factual."
     messages = [{"role": "system", "content": system_prompt}]
+    history = st.session_state.history[-10:]
+    for chat in history:
+        messages.append({"role": chat["role"], "content": chat["content"]})
     if context_qa:
-        messages.append({"role": "user", "content": f"{context_qa['question']}\n{context_qa['answer']}\n\nAnswer: {user_input}"})
-    else:
-        messages.append({"role": "user", "content": user_input})
+        messages.append({
+            "role": "user",
+            "content": f"Use this info:\nQ: {context_qa['question']}\nA: {context_qa['answer']}"
+        })
+    messages.append({"role": "user", "content": user_input})
+
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo", messages=messages, temperature=0.3
+            model=model_name,
+            messages=messages,
+            temperature=0.3
         )
         return response.choices[0].message["content"].strip()
     except Exception as e:
@@ -157,10 +148,7 @@ def apply_filters(df, faculty, department, level, semester):
         df = df[df["semester"] == semester]
     return df
 
-# Load resources
-df = load_data()
-model = load_model()
-
+# Session State
 if "history" not in st.session_state:
     st.session_state.history = []
 if "related_questions" not in st.session_state:
@@ -170,23 +158,27 @@ if "embedding_cache" not in st.session_state:
 if "faiss_index_cache" not in st.session_state:
     st.session_state.faiss_index_cache = {}
 
-# Sidebar for filters & clear chat
+# Load data/model
+df = load_data()
+model = load_model()
+
+# Sidebar
 with st.sidebar:
     st.title("Crescent University RAG Chatbot")
     if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.session_state.related_questions = []
-        # No rerun needed, Streamlit handles it
     st.subheader("📚 Filters")
     selected_faculty = st.selectbox("Faculty", ["All"] + sorted(df["faculty"].dropna().unique().tolist()))
     selected_department = st.selectbox("Department", ["All"] + sorted(df["department"].dropna().unique().tolist()))
     selected_level = st.selectbox("Level", ["All"] + sorted(df["level"].dropna().unique().tolist()))
     selected_semester = st.selectbox("Semester", ["All"] + sorted(df["semester"].dropna().unique().tolist()))
+    st.subheader("⚙️ Model")
+    model_choice = st.radio("Choose model", ["gpt-3.5-turbo", "gpt-4"], index=1)
 
 # Main title
 st.title("🎓 Crescent University Chatbot")
-
-# Container for chat messages
+st.markdown(f"**Model in use:** `{model_choice}`")
 chat_container = st.container()
 
 def render_chat():
@@ -194,18 +186,15 @@ def render_chat():
         for chat in st.session_state.history:
             cls = "chat-message-user" if chat["role"] == "user" else "chat-message-assistant"
             st.markdown(f"<div class='{cls}'>{chat['content']}</div>", unsafe_allow_html=True)
-        # Invisible div for autoscroll target
         st.markdown("<div id='scroll-target'></div>", unsafe_allow_html=True)
-        # Inject JS to scroll to bottom
-        st.markdown(
-            """
+        st.markdown("""
             <script>
                 const element = document.getElementById('scroll-target');
                 if (element) {
                     element.scrollIntoView({behavior: 'smooth'});
                 }
             </script>
-            """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
 render_chat()
 
@@ -238,11 +227,12 @@ if user_input:
             "question": filtered_df.iloc[best_idx]["question"],
             "answer": filtered_df.iloc[best_idx]["answer"]
         }
-        reply = fallback_openai(user_input, context_qa)
 
+        reply = fallback_openai(user_input, context_qa, model_choice)
         st.session_state.related_questions = get_related_questions(user_input, filtered_df, index, model)
 
     st.session_state.history.append({"role": "assistant", "content": reply})
+    st.experimental_rerun()
 
 # Show related questions
 if st.session_state.related_questions:
@@ -250,5 +240,4 @@ if st.session_state.related_questions:
     for q in st.session_state.related_questions:
         if st.button(q):
             st.session_state.history.append({"role": "user", "content": q})
-            # No st.experimental_rerun() needed
-
+            st.experimental_rerun()
