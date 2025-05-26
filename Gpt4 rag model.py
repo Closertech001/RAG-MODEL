@@ -215,6 +215,10 @@ user_input = st.chat_input("Ask your question:")
 
 if user_input:
     st.session_state.history.append({"role": "user", "content": user_input})
+    # ... processing to get reply
+    st.session_state.history.append({"role": "assistant", "content": reply})
+
+    # Instead of rerun, just rely on Streamlit reactivity — so remove st.experimental_rerun()
 
     if is_greeting(user_input):
         reply = random.choice([
