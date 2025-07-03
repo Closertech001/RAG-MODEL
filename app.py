@@ -6,6 +6,10 @@ from rag_engine import (
     ask_gpt_with_memory, log_feedback
 )
 from utils import convert_file_to_chunks, append_chunks_to_json
+from db import init_db, get_user, add_user, get_chat_history, save_chat
+
+# Initialize database
+init_db()
 
 st.set_page_config(page_title="🎓 University Assistant", layout="wide")
 st.title("🎓 Crescent University Assistant Chatbot")
@@ -29,6 +33,17 @@ faculty = st.selectbox("Select Faculty", faculties)
 department = st.selectbox("Select Department", departments[faculty])
 level = st.selectbox("Select Level", ["100", "200", "300", "400", "500"])
 
+# Identify or register user
+user_name = st.text_input("👤 Enter Your Name")
+user_id = None
+if user_name:
+    user_id = get_user(user_name)
+    if not user_id:
+        user_id = add_user(user_name, department, faculty)
+        st.success(f"👋 Welcome, {user_name}!")
+    else:
+        st.info(f"👋 Welcome back, {user_name}!")
+
 # Load & index
 @st.cache_resource
 def setup():
@@ -39,10 +54,11 @@ def setup():
 chunks, index, model = setup()
 
 # Chat memory
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        {"role": "system", "content": f"You are a helpful assistant for students in the {department} department, {faculty} faculty."}
-    ]
+if "chat_history" not in st.session_state and user_id:
+    history = get_chat_history(user_id)
+    if not history:
+        history = [{"role": "system", "content": f"You are a helpful assistant for students in the {department} department, {faculty} faculty."}]
+    st.session_state.chat_history = history
 
 # Reset chat
 if st.button("🔄 Reset Chat"):
@@ -58,20 +74,23 @@ with st.expander("📤 Upload University Docs"):
         st.success("Content added! Please rerun the app to reindex.")
 
 # Display past messages
-for msg in st.session_state.chat_history[1:]:
-    who = "🧑 You" if msg["role"] == "user" else "🤖 Bot"
-    st.markdown(f"**{who}:** {msg['content']}")
+if "chat_history" in st.session_state:
+    for msg in st.session_state.chat_history[1:]:
+        who = "🧑 You" if msg["role"] == "user" else "🤖 Bot"
+        st.markdown(f"**{who}:** {msg['content']}")
 
 # Ask a question
 query = st.text_input("💬 Ask a question")
-if query and api_key:
+if query and api_key and user_id:
     normalized = normalize_input(query, DEFAULT_VOCAB, model)
     top_chunks = search(normalized, index, model, [c for c in chunks], top_k=3)
     context = "\n\n".join(top_chunks)
     prompt = f"Use this context to answer as clearly as possible:\n\n{context}\n\nQuestion: {normalized}"
     st.session_state.chat_history.append({"role": "user", "content": prompt})
+    save_chat(user_id, "user", prompt)
     reply, usage = ask_gpt_with_memory(st.session_state.chat_history, max_history=6)
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
+    save_chat(user_id, "assistant", reply)
     st.rerun()
 
 # Feedback
