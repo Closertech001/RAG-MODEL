@@ -16,7 +16,7 @@ if api_key:
     os.environ["OPENAI_API_KEY"] = api_key
 
 # Select metadata filters
-faculties = ["Science", "Engineering", "Arts", "Social Sciences", "Law"]
+faculties = ["CONAS", "COHES", "COES", "BACOLAW", "CICOT"]
 departments = {
     "Science": ["Computer Science", "Biochemistry"],
     "Engineering": ["Electrical Engineering", "Mechanical Engineering"],
