@@ -39,9 +39,8 @@ DEFAULT_VOCAB = [
     "overfitting", "underfitting", "data", "model", "training", "exam"
 ]
 
-# Load data from JSON
-def load_chunks(qa_dataset.json):
-    with open(qa_dataset.json, "r", encoding="utf-8") as f:
+def load_chunks(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     
     # Create a 'content' field by merging 'question' and 'answer'
