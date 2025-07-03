@@ -1,149 +1,97 @@
-# --- rag_engine.py ---
-import json
+# app.py
+import streamlit as st
 import os
-import re
-import faiss
-import numpy as np
+import time
 import openai
-from textblob import TextBlob
-from sentence_transformers import SentenceTransformer, util
-from datetime import datetime
-from collections import deque
+from rag_engine import load_chunks, build_index, search, normalize_input, ask_gpt_with_memory, is_small_talk, handle_small_talk
+from db import init_tables, get_user, create_user, save_chat
+from memory import ContextMemory
+from symspell_setup import correct_query
+from config import BOT_PERSONALITY, SMALL_TALK_PATTERNS
+from sentence_transformers import SentenceTransformer
+import random
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# --- App Config ---
+st.set_page_config(page_title="🎓 CrescentBot AI Assistant", layout="wide")
+st.title("🤖 Crescent University Assistant Bot")
 
-# Hardcoded abbreviations and synonyms
-ABBREVIATIONS = {
-    "ai": "artificial intelligence",
-    "ml": "machine learning",
-    "cv": "computer vision",
-    "ds": "data science",
-    "cs": "computer science",
-    "u": "you",
-    "r": "are",
-    "ur": "your"
-}
+# --- Init DB Tables ---
+init_tables()
 
-SYNONYMS = {
-    "study": "learn",
-    "teach": "educate",
-    "trainer": "instructor",
-    "professor": "instructor",
-    "school": "university",
-    "uni": "university",
-    "lecture": "class",
-    "learnt": "learned"
-}
+# --- Load Data and Build Index ---
+with st.spinner("🔍 Initializing engine..."):
+    chunks, raw_data = load_chunks("qa_dataset.json")
+    index, model, embeddings = build_index(chunks)
 
-DEFAULT_VOCAB = [
-    "learn", "study", "education", "instructor", "professor", "university",
-    "student", "machine learning", "artificial intelligence", "class",
-    "overfitting", "underfitting", "data", "model", "training", "exam"
-]
+# --- Session State Init ---
+if "context" not in st.session_state:
+    st.session_state.context = ContextMemory()
 
-# --- Context tracking for coreference resolution ---
-recent_entities = deque(maxlen=5)
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
 
-def track_entity(text):
-    # Add nouns or topics to recent memory
-    tokens = re.findall(r'\b\w+\b', text.lower())
-    for token in tokens:
-        if token in DEFAULT_VOCAB or len(token) > 4:
-            recent_entities.append(token)
+# --- Sidebar: User Auth ---
+st.sidebar.header("🔐 User Profile")
+name = st.sidebar.text_input("Enter your name")
+faculty = st.sidebar.selectbox("Faculty", ["", "Health Sciences", "ICT", "Law", "Natural Sciences", "Social Sciences"])
+department = st.sidebar.text_input("Department")
 
-def resolve_coreferences(query):
-    # Replace ambiguous references like "that" or "it" with last entity
-    if any(ref in query.lower() for ref in ["that", "it", "this", "they"]):
-        if recent_entities:
-            last = recent_entities[-1]
-            query = re.sub(r"\b(that|this|it|they)\b", last, query, flags=re.IGNORECASE)
-    return query
+if name and st.sidebar.button("Start Chat"):
+    user = get_user(name)
+    if not user:
+        st.session_state.user_id = create_user(name, faculty, department)
+    else:
+        st.session_state.user_id = user["id"]
+    st.success(f"Welcome, {name}! 👋")
 
-# Load data from JSON
-def load_chunks(json_path="data/data.json"):
-    with open(json_path) as f:
-        data = json.load(f)
-    return [item["content"] for item in data], data
+# --- Chat Interface ---
+st.markdown("---")
+st.markdown(BOT_PERSONALITY["greeting"])
+user_query = st.text_input("Ask me anything about Crescent University:")
 
-# Build FAISS index
-def build_index(text_chunks, model_name="all-MiniLM-L6-v2"):
-    model = SentenceTransformer(model_name)
-    embeddings = model.encode(text_chunks, convert_to_numpy=True)
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dim)
-    index.add(embeddings)
-    return index, model, embeddings
+if user_query:
+    with st.spinner("Thinking..."):
+        corrected = correct_query(user_query)
 
-# Semantic search
-def search(query, index, model, chunks, top_k=1):
-    query_vec = model.encode([query])[0]
-    D, I = index.search(np.array([query_vec]), k=top_k)
-    return [chunks[i] for i in I[0]], float(D[0][0])
-
-# Spelling correction
-def correct_spelling(text):
-    return str(TextBlob(text).correct())
-
-# Semantic normalization of each word
-def semantic_normalize(input_text, vocab_list, model):
-    input_tokens = input_text.lower().split()
-    normalized_tokens = []
-    for token in input_tokens:
-        token_emb = model.encode(token, convert_to_tensor=True)
-        vocab_embs = model.encode(vocab_list, convert_to_tensor=True)
-        scores = util.pytorch_cos_sim(token_emb, vocab_embs)[0]
-        best_match_idx = scores.argmax().item()
-        best_match = vocab_list[best_match_idx]
-        normalized_tokens.append(best_match)
-    return " ".join(normalized_tokens)
-
-# Full input normalization pipeline
-def normalize_input(text, vocab_list, model):
-    corrected = correct_spelling(text)
-    text = corrected.lower()
-    text = re.sub(r'[^\w\s]', '', text)
-    words = text.split()
-    processed = []
-    for word in words:
-        if word in ABBREVIATIONS:
-            processed.append(ABBREVIATIONS[word])
-        elif word in SYNONYMS:
-            processed.append(SYNONYMS[word])
+        if is_small_talk(corrected):
+            response = handle_small_talk(corrected)
         else:
-            processed.append(word)
-    text = " ".join(processed)
-    return semantic_normalize(text, DEFAULT_VOCAB, model)
+            norm_query = normalize_input(corrected, None, model)
+            top_match, score = search(norm_query, index, model, chunks, top_k=1)
 
-# GPT generation with memory + limit
-def ask_gpt_with_memory(messages, max_history=6, model="gpt-3.5-turbo"):
-    if len(messages) > max_history + 1:
-        messages = [messages[0]] + messages[-max_history:]
-    try:
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=500
-        )
-        return response.choices[0].message["content"].strip(), response["usage"]
-    except Exception as e:
-        return f"Error: {e}", {"prompt_tokens": 0, "completion_tokens": 0}
+            # If confidence is low, use GPT
+            if score > 0.6:
+                response = top_match[0]
+            else:
+                history = st.session_state.context.get_context()
+                messages = [{"role": "system", "content": f"You are {BOT_PERSONALITY['name']}, an academic assistant."}]
+                for turn in history:
+                    messages.append({"role": "user", "content": turn["user"]})
+                    messages.append({"role": "assistant", "content": turn["bot"]})
+                messages.append({"role": "user", "content": user_query})
+                response, _ = ask_gpt_with_memory(messages)
 
-# Feedback logging
-def log_feedback(query, answer, rating):
-    with open("feedback.csv", "a") as f:
-        f.write(f"{datetime.now()},\"{query}\",\"{answer}\",{rating}\n")
+        st.markdown(f"**You:** {user_query}")
+        st.markdown(f"**{BOT_PERSONALITY['name']}:** {response}")
 
-# Small talk detection
-def is_small_talk(query):
-    patterns = ["hello", "hi", "how are you", "your name", "tell me a joke"]
-    return any(p in query.lower() for p in patterns)
+        # Save to DB and memory
+        if st.session_state.user_id:
+            save_chat(st.session_state.user_id, user_query, response)
+        st.session_state.context.add_turn(user_query, response)
 
-def handle_small_talk(query):
-    if "hello" in query.lower() or "hi" in query.lower():
-        return "Hi there! How can I assist you today?"
-    if "joke" in query.lower():
-        return "Why don't scientists trust atoms? Because they make up everything!"
-    if "your name" in query.lower():
-        return "I’m CrescentBot, your university assistant."
-    return "I'm here to help with anything academic-related!"
+        # Optional rating
+        rating = st.radio("Was this helpful?", ["👍", "👎"], horizontal=True, key=f"rate-{random.randint(1,10000)}")
+        if rating:
+            with open("feedback.csv", "a") as f:
+                f.write(f"{time.time()},\"{user_query}\",\"{response}\",{rating}\n")
+
+# --- Upload Docs ---
+st.sidebar.markdown("---")
+st.sidebar.header("📤 Upload University Docs")
+uploaded = st.sidebar.file_uploader("Upload PDF/DOCX/CSV", type=["pdf", "docx", "txt", "csv"])
+
+if uploaded and st.sidebar.button("Ingest File"):
+    from utils import convert_file_to_chunks, append_chunks_to_json
+    new_chunks = convert_file_to_chunks(uploaded, faculty, department, level="100")
+    append_chunks_to_json(new_chunks)
+    st.sidebar.success("File ingested! Please restart app to reindex.")
