@@ -58,7 +58,7 @@ def build_index(text_chunks, model_name="all-MiniLM-L6-v2"):
 def search(query, index, model, chunks, top_k=1):
     query_vec = model.encode([query])[0]
     D, I = index.search(np.array([query_vec]), k=top_k)
-    return [chunks[i] for i in I[0]]
+    return [chunks[i] for i in I[0]], float(D[0][0])
 
 # Spelling correction
 def correct_spelling(text):
@@ -113,3 +113,17 @@ def ask_gpt_with_memory(messages, max_history=6, model="gpt-3.5-turbo"):
 def log_feedback(query, answer, rating):
     with open("feedback.csv", "a") as f:
         f.write(f"{datetime.now()},\"{query}\",\"{answer}\",{rating}\n")
+
+# Small talk detection
+def is_small_talk(query):
+    patterns = ["hello", "hi", "how are you", "your name", "tell me a joke"]
+    return any(p in query.lower() for p in patterns)
+
+def handle_small_talk(query):
+    if "hello" in query.lower() or "hi" in query.lower():
+        return "Hi there! How can I assist you today?"
+    if "joke" in query.lower():
+        return "Why don't scientists trust atoms? Because they make up everything!"
+    if "your name" in query.lower():
+        return "I’m CrescentBot, your university assistant."
+    return "I'm here to help with anything academic-related!"
