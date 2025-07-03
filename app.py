@@ -1,6 +1,7 @@
 # --- app.py ---
 import streamlit as st
 import os
+import time
 from rag_engine import (
     load_chunks, build_index, search, normalize_input, DEFAULT_VOCAB,
     ask_gpt_with_memory, log_feedback, is_small_talk, handle_small_talk
@@ -8,6 +9,7 @@ from rag_engine import (
 from utils import convert_file_to_chunks, append_chunks_to_json
 from db import init_db, get_user, add_user, get_chat_history, save_chat
 from textblob import TextBlob
+import openai
 
 # Initialize database
 init_db()
@@ -19,6 +21,7 @@ st.title("🎓 Crescent University Assistant Chatbot")
 api_key = st.text_input("🔐 Enter your OpenAI API Key", type="password")
 if api_key:
     os.environ["OPENAI_API_KEY"] = api_key
+    openai.api_key = api_key
 
 # Select metadata filters
 faculties = ["College of Natural and Applied Sciences", "College of Health Sciences", "College of Environmental Sciences", "Bola Ajibola College of Law", "College of Arts, Social and Management Sciences"]
@@ -115,12 +118,29 @@ if query and api_key and user_id:
         st.rerun()
 
     prompt = f"Use this context to answer as clearly as possible in a {tone} tone:\n\n{context}\n\nQuestion: {normalized}"
-    st.session_state.chat_history.append({"role": "user", "content": prompt})
-    save_chat(user_id, "user", prompt)
+    st.session_state.chat_history.append({"role": "user", "content": query})
+    save_chat(user_id, "user", query)
 
-    reply, usage = ask_gpt_with_memory(st.session_state.chat_history, max_history=6)
-    st.session_state.chat_history.append({"role": "assistant", "content": reply})
-    save_chat(user_id, "assistant", reply)
+    # Streaming GPT
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=st.session_state.chat_history + [{"role": "user", "content": prompt}],
+        stream=True,
+        temperature=0.7,
+        max_tokens=500
+    )
+
+    streamed_reply = ""
+    response_placeholder = st.empty()
+    for chunk in response:
+        if "choices" in chunk and len(chunk.choices) > 0:
+            delta = chunk.choices[0].delta.get("content", "")
+            streamed_reply += delta
+            response_placeholder.markdown(f"**🤖 Bot:** {streamed_reply}")
+            time.sleep(0.01)
+
+    st.session_state.chat_history.append({"role": "assistant", "content": streamed_reply})
+    save_chat(user_id, "assistant", streamed_reply)
     st.rerun()
 
 # Feedback
