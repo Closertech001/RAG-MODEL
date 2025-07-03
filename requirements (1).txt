@@ -1,0 +1,11 @@
+streamlit
+openai
+faiss-cpu
+sentence-transformers
+textblob
+scikit-learn
+numpy
+pandas
+pdfplumber
+python-docx
+PyMuPDF
