@@ -1,78 +1,65 @@
-# --- db.py ---
+# db.py
 import psycopg2
+from psycopg2.extras import RealDictCursor
 import os
 
-DB_NAME = os.getenv("DB_NAME", "crescent_chatbot")
-DB_USER = os.getenv("DB_USER", "chatbot_user")
-DB_PASS = os.getenv("DB_PASS", "yourpassword")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
+DB_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/crescent_db")
 
-def connect():
-    return psycopg2.connect(
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-        host=DB_HOST,
-        port=DB_PORT
-    )
+def get_connection():
+    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
-def init_db():
-    conn = connect()
+def init_tables():
+    conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT,
-        department TEXT,
-        faculty TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    
-    CREATE TABLE IF NOT EXISTS chat_history (
-        id SERIAL PRIMARY KEY,
-        user_id INT REFERENCES users(id),
-        role TEXT,  -- 'user' or 'assistant'
-        message TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            department TEXT,
+            faculty TEXT,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id),
+            message TEXT,
+            response TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
+    cur.close()
     conn.close()
 
-def add_user(name, department, faculty):
-    conn = connect()
+def get_user(name):
+    conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO users (name, department, faculty) VALUES (%s, %s, %s) RETURNING id",
-                (name, department, faculty))
-    user_id = cur.fetchone()[0]
+    cur.execute("SELECT * FROM users WHERE name=%s", (name,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user
+
+def create_user(name, faculty=None, department=None):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (name, faculty, department) VALUES (%s, %s, %s) RETURNING id",
+        (name, faculty, department)
+    )
+    user_id = cur.fetchone()["id"]
     conn.commit()
+    cur.close()
     conn.close()
     return user_id
 
-def get_user(name):
-    conn = connect()
+def save_chat(user_id, message, response):
+    conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE name = %s", (name,))
-    result = cur.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def save_chat(user_id, role, message):
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO chat_history (user_id, role, message) VALUES (%s, %s, %s)",
-                (user_id, role, message))
+    cur.execute("INSERT INTO chats (user_id, message, response) VALUES (%s, %s, %s)",
+                (user_id, message, response))
     conn.commit()
+    cur.close()
     conn.close()
-
-def get_chat_history(user_id, limit=10):
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT role, message FROM chat_history 
-        WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s
-    """, (user_id, limit))
-    rows = cur.fetchall()
-    conn.close()
-    return [{"role": r, "content": m} for r, m in reversed(rows)]
