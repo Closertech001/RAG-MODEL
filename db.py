@@ -1,3 +1,5 @@
+# db.py
+
 import sqlite3
 from sqlite3 import Connection, Row
 import os
@@ -6,7 +8,7 @@ DB_PATH = os.getenv("SQLITE_DB_PATH", "crescent_db.sqlite3")
 
 def get_connection() -> Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = Row  # to access columns by name like dict
+    conn.row_factory = Row
     return conn
 
 def init_tables():
