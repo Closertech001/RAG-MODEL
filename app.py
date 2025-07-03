@@ -7,7 +7,7 @@ from rag_engine import (
     ask_gpt_with_memory, log_feedback, is_small_talk, handle_small_talk
 )
 from utils import convert_file_to_chunks, append_chunks_to_json
-from db import init_db, get_user, add_user, get_chat_history, save_chat
+from db import init_db, get_user, add_user, get_chat_history, save_chat, update_user_prefs, get_user_profile
 from textblob import TextBlob
 import openai
 
@@ -33,20 +33,25 @@ departments = {
     "Bola Ajibola College of Law": ["Department of Law (LL.B)"]
 }
 
-faculty = st.selectbox("Select Faculty", faculties)
-department = st.selectbox("Select Department", departments[faculty])
-level = st.selectbox("Select Level", ["100", "200", "300", "400", "500"])
-
 # Identify or register user
 user_name = st.text_input("👤 Enter Your Name")
 user_id = None
+profile = {}
 if user_name:
     user_id = get_user(user_name)
     if not user_id:
+        faculty = st.selectbox("Select Faculty", faculties)
+        department = st.selectbox("Select Department", departments[faculty])
+        level = st.selectbox("Select Level", ["100", "200", "300", "400", "500"])
         user_id = add_user(user_name, department, faculty)
+        update_user_prefs(user_id, level, "neutral")
         st.success(f"👋 Welcome, {user_name}!")
     else:
-        st.info(f"👋 Welcome back, {user_name}!")
+        profile = get_user_profile(user_id)
+        department = profile.get("department", "")
+        faculty = profile.get("faculty", "")
+        level = profile.get("level", "")
+        st.info(f"👋 Welcome back, {user_name}! You're in {department}, Level {level}.")
 
 # Load & index
 @st.cache_resource
@@ -61,7 +66,7 @@ chunks, index, model = setup()
 if "chat_history" not in st.session_state and user_id:
     history = get_chat_history(user_id)
     if not history:
-        history = [{"role": "system", "content": f"You are a helpful assistant for students in the {department} department, {faculty} faculty."}]
+        history = [{"role": "system", "content": f"You are a helpful assistant for students like {user_name} in the {department} department, {faculty} faculty."}]
     st.session_state.chat_history = history
 
 # Reset chat
@@ -103,21 +108,26 @@ if query and api_key and user_id:
         tone = "enthusiastic"
     else:
         tone = "neutral"
+    update_user_prefs(user_id, level, tone)
 
     normalized = normalize_input(query, DEFAULT_VOCAB, model)
     top_chunks = search(normalized, index, model, [c for c in chunks], top_k=3)
     context = "\n\n".join(top_chunks)
 
-    # Clarification handling if no good context
+    # Clarification handling
     if len(top_chunks) == 0 or len(context.strip()) < 20:
-        reply = "🤔 I'm not quite sure what you meant. Could you please clarify your question a bit more?"
+        reply = f"🤔 Hmm, I’m not sure I understand that, {user_name}. Can you clarify a bit more?"
         st.session_state.chat_history.append({"role": "user", "content": query})
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
         save_chat(user_id, "user", query)
         save_chat(user_id, "assistant", reply)
         st.rerun()
 
-    prompt = f"Use this context to answer as clearly as possible in a {tone} tone:\n\n{context}\n\nQuestion: {normalized}"
+    prompt = f"Use this context to answer in a {tone} tone. Refer to the student as {user_name}:
+
+{context}
+
+Question from {user_name}: {normalized}"
     st.session_state.chat_history.append({"role": "user", "content": query})
     save_chat(user_id, "user", query)
 
