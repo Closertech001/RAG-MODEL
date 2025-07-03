@@ -40,9 +40,14 @@ DEFAULT_VOCAB = [
 ]
 
 # Load data from JSON
-def load_chunks(json_path="data/data.json"):
-    with open(json_path) as f:
+def load_chunks(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
+    
+    # Create a 'content' field by merging 'question' and 'answer'
+    for item in data:
+        item["content"] = item["question"] + " " + item["answer"]
+        
     return [item["content"] for item in data], data
 
 # Build FAISS index
