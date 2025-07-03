@@ -1,36 +1,35 @@
-# app.py
+# main_app.py
+
 import streamlit as st
-import os
 import time
-import openai
+import random
 from rag_engine import load_chunks, build_index, search, normalize_input, ask_gpt_with_memory, is_small_talk, handle_small_talk
 from db import init_tables, get_user, create_user, save_chat
 from memory import ContextMemory
 from symspell_setup import correct_query
-from config import BOT_PERSONALITY, SMALL_TALK_PATTERNS
+from config import BOT_PERSONALITY, SMALL_TALK_PATTERNS, DEFAULT_VOCAB
+from utils import convert_file_to_chunks, append_chunks_to_json
 from sentence_transformers import SentenceTransformer
-import random
 
-# --- App Config ---
+# --- Streamlit App Config ---
 st.set_page_config(page_title="🎓 CrescentBot AI Assistant", layout="wide")
 st.title("🤖 Crescent University Assistant Bot")
 
-# --- Init DB Tables ---
+# --- Initialize Tables & Data ---
 init_tables()
 
-# --- Load Data and Build Index ---
 with st.spinner("🔍 Initializing engine..."):
     chunks, raw_data = load_chunks("qa_dataset.json")
     index, model, embeddings = build_index(chunks)
 
-# --- Session State Init ---
+# --- Session State ---
 if "context" not in st.session_state:
     st.session_state.context = ContextMemory()
 
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
 
-# --- Sidebar: User Auth ---
+# --- Sidebar: User Profile ---
 st.sidebar.header("🔐 User Profile")
 name = st.sidebar.text_input("Enter your name")
 faculty = st.sidebar.selectbox("Faculty", ["", "Health Sciences", "ICT", "Law", "Natural Sciences", "Social Sciences"])
@@ -44,7 +43,7 @@ if name and st.sidebar.button("Start Chat"):
         st.session_state.user_id = user["id"]
     st.success(f"Welcome, {name}! 👋")
 
-# --- Chat Interface ---
+# --- Main Chat ---
 st.markdown("---")
 st.markdown(BOT_PERSONALITY["greeting"])
 user_query = st.text_input("Ask me anything about Crescent University:")
@@ -56,10 +55,9 @@ if user_query:
         if is_small_talk(corrected):
             response = handle_small_talk(corrected)
         else:
-            norm_query = normalize_input(corrected, None, model)
+            norm_query = normalize_input(corrected, DEFAULT_VOCAB, model)
             top_match, score = search(norm_query, index, model, chunks, top_k=1)
 
-            # If confidence is low, use GPT
             if score > 0.6:
                 response = top_match[0]
             else:
@@ -74,24 +72,21 @@ if user_query:
         st.markdown(f"**You:** {user_query}")
         st.markdown(f"**{BOT_PERSONALITY['name']}:** {response}")
 
-        # Save to DB and memory
         if st.session_state.user_id:
             save_chat(st.session_state.user_id, user_query, response)
         st.session_state.context.add_turn(user_query, response)
 
-        # Optional rating
         rating = st.radio("Was this helpful?", ["👍", "👎"], horizontal=True, key=f"rate-{random.randint(1,10000)}")
         if rating:
             with open("feedback.csv", "a") as f:
                 f.write(f"{time.time()},\"{user_query}\",\"{response}\",{rating}\n")
 
-# --- Upload Docs ---
+# --- Upload University Docs ---
 st.sidebar.markdown("---")
 st.sidebar.header("📤 Upload University Docs")
-uploaded = st.sidebar.file_uploader("Upload PDF/DOCX/CSV", type=["pdf", "docx", "txt", "csv"])
+uploaded = st.sidebar.file_uploader("Upload PDF/DOCX/TXT/CSV", type=["pdf", "docx", "txt", "csv"])
 
 if uploaded and st.sidebar.button("Ingest File"):
-    from utils import convert_file_to_chunks, append_chunks_to_json
     new_chunks = convert_file_to_chunks(uploaded, faculty, department, level="100")
     append_chunks_to_json(new_chunks)
     st.sidebar.success("File ingested! Please restart app to reindex.")
