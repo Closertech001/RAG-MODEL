@@ -16,18 +16,18 @@ if api_key:
     os.environ["OPENAI_API_KEY"] = api_key
 
 # Select metadata filters
-faculties = ["CONAS", "COHES", "COES", "BACOLAW", "CICOT"]
+faculties = ["College of Natural and Applied Sciences", "College of Health Sciences", "College of Environmental Sciences", "BACOLAW", "CICOT", "CASMAS"]
 departments = {
-    "Science": ["Computer Science", "Biochemistry"],
-    "Engineering": ["Electrical Engineering", "Mechanical Engineering"],
-    "Arts": ["English", "History"],
-    "Social Sciences": ["Economics", "Sociology"],
-    "Law": ["Law"]
+    "College of Health Sciences": ["Department of Nursing", "Department of Physiology", "Departments of Anatomy"],
+    "College of Natural and Applied Sciences": ["Department of Biological Sciences(Microbiology)", "Department of Chemical Sciences(Biochemistry)", "department of Computer Science"],
+    "College of Environmental Sciences": ["Department of Architecture"],
+    "College of Arts, Social and Management Sciences": ["Department of Accounting", "Department of Business Administration", "Department of Economics with Operations Research", "Department of Mass Communication", "Department of Political Science and International Studies"],
+    "Bola Ajibola College of Law": ["Department of Law (LL.B)"]
 }
 
 faculty = st.selectbox("Select Faculty", faculties)
 department = st.selectbox("Select Department", departments[faculty])
-level = st.selectbox("Select Level", ["100", "200", "300", "400"])
+level = st.selectbox("Select Level", ["100", "200", "300", "400", "500"])
 
 # Load & index
 @st.cache_resource
