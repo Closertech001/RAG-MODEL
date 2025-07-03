@@ -4,13 +4,16 @@ import sqlite3
 from sqlite3 import Connection, Row
 import os
 
+# Optional: use env var or fallback to default file name
 DB_PATH = os.getenv("SQLITE_DB_PATH", "crescent_db.sqlite3")
 
+# ✅ Function that returns a connection object
 def get_connection() -> Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = Row
+    conn.row_factory = Row  # Enables row access like dictionaries
     return conn
 
+# ✅ Function to initialize tables
 def init_tables():
     with get_connection() as conn:
         cur = conn.cursor()
@@ -33,29 +36,4 @@ def init_tables():
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
         """)
-        conn.commit()
-
-def get_user(name):
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE name=?", (name,))
-        return cur.fetchone()
-
-def create_user(name, faculty=None, department=None):
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO users (name, faculty, department) VALUES (?, ?, ?)",
-            (name, faculty, department)
-        )
-        conn.commit()
-        return cur.lastrowid
-
-def save_chat(user_id, message, response):
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO chats (user_id, message, response) VALUES (?, ?, ?)",
-            (user_id, message, response)
-        )
         conn.commit()
