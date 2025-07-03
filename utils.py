@@ -46,7 +46,7 @@ def convert_file_to_chunks(file, faculty, department, level):
     ]
 
 # Save uploaded chunks to JSON
-def append_chunks_to_json(new_chunks, json_path="data/data.json"):
+def append_chunks_to_json(new_chunks, json_path="qa_dataset.json"):
     if os.path.exists(json_path):
         with open(json_path, "r") as f:
             data = json.load(f)
