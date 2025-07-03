@@ -1,168 +1,149 @@
-# --- app.py ---
-import streamlit as st
+# --- rag_engine.py ---
+import json
 import os
-import time
-from rag_engine import (
-    load_chunks, build_index, search, normalize_input, DEFAULT_VOCAB,
-    ask_gpt_with_memory, log_feedback, is_small_talk, handle_small_talk
-)
-from utils import convert_file_to_chunks, append_chunks_to_json
-from db import init_db, get_user, add_user, get_chat_history, save_chat, update_user_prefs, get_user_profile
-from textblob import TextBlob
+import re
+import faiss
+import numpy as np
 import openai
+from textblob import TextBlob
+from sentence_transformers import SentenceTransformer, util
+from datetime import datetime
+from collections import deque
 
-# Initialize database
-init_db()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-st.set_page_config(page_title="🎓 University Assistant", layout="wide")
-st.title("🎓 Crescent University Assistant Chatbot")
-
-# Set OpenAI Key
-api_key = st.text_input("🔐 Enter your OpenAI API Key", type="password")
-if api_key:
-    os.environ["OPENAI_API_KEY"] = api_key
-    openai.api_key = api_key
-
-# Select metadata filters
-faculties = ["College of Natural and Applied Sciences", "College of Health Sciences", "College of Environmental Sciences", "Bola Ajibola College of Law", "College of Arts, Social and Management Sciences"]
-departments = {
-    "College of Health Sciences": ["Department of Nursing", "Department of Physiology", "Departments of Anatomy"],
-    "College of Natural and Applied Sciences": ["Department of Biological Sciences(Microbiology)", "Department of Chemical Sciences(Biochemistry)", "department of Computer Science"],
-    "College of Environmental Sciences": ["Department of Architecture"],
-    "College of Arts, Social and Management Sciences": ["Department of Accounting", "Department of Business Administration", "Department of Economics with Operations Research", "Department of Mass Communication", "Department of Political Science and International Studies"],
-    "Bola Ajibola College of Law": ["Department of Law (LL.B)"]
+# Hardcoded abbreviations and synonyms
+ABBREVIATIONS = {
+    "ai": "artificial intelligence",
+    "ml": "machine learning",
+    "cv": "computer vision",
+    "ds": "data science",
+    "cs": "computer science",
+    "u": "you",
+    "r": "are",
+    "ur": "your"
 }
 
-# Identify or register user
-user_name = st.text_input("👤 Enter Your Name")
-user_id = None
-profile = {}
-if user_name:
-    user_id = get_user(user_name)
-    if not user_id:
-        faculty = st.selectbox("Select Faculty", faculties)
-        department = st.selectbox("Select Department", departments[faculty])
-        level = st.selectbox("Select Level", ["100", "200", "300", "400", "500"])
-        user_id = add_user(user_name, department, faculty)
-        update_user_prefs(user_id, level, "neutral")
-        st.success(f"👋 Welcome, {user_name}!")
-    else:
-        profile = get_user_profile(user_id)
-        department = profile.get("department", "")
-        faculty = profile.get("faculty", "")
-        level = profile.get("level", "")
-        st.info(f"👋 Welcome back, {user_name}! You're in {department}, Level {level}.")
+SYNONYMS = {
+    "study": "learn",
+    "teach": "educate",
+    "trainer": "instructor",
+    "professor": "instructor",
+    "school": "university",
+    "uni": "university",
+    "lecture": "class",
+    "learnt": "learned"
+}
 
-# Load & index
-@st.cache_resource
-def setup():
-    chunks, _ = load_chunks()
-    index, model, _ = build_index([c for c in chunks])
-    return chunks, index, model
+DEFAULT_VOCAB = [
+    "learn", "study", "education", "instructor", "professor", "university",
+    "student", "machine learning", "artificial intelligence", "class",
+    "overfitting", "underfitting", "data", "model", "training", "exam"
+]
 
-chunks, index, model = setup()
+# --- Context tracking for coreference resolution ---
+recent_entities = deque(maxlen=5)
 
-# Chat memory
-if "chat_history" not in st.session_state and user_id:
-    history = get_chat_history(user_id)
-    if not history:
-        history = [{"role": "system", "content": f"You are a helpful assistant for students like {user_name} in the {department} department, {faculty} faculty."}]
-    st.session_state.chat_history = history
+def track_entity(text):
+    # Add nouns or topics to recent memory
+    tokens = re.findall(r'\b\w+\b', text.lower())
+    for token in tokens:
+        if token in DEFAULT_VOCAB or len(token) > 4:
+            recent_entities.append(token)
 
-# Reset chat
-if st.button("🔄 Reset Chat"):
-    st.session_state.chat_history = st.session_state.chat_history[:1]
-    st.rerun()
+def resolve_coreferences(query):
+    # Replace ambiguous references like "that" or "it" with last entity
+    if any(ref in query.lower() for ref in ["that", "it", "this", "they"]):
+        if recent_entities:
+            last = recent_entities[-1]
+            query = re.sub(r"\b(that|this|it|they)\b", last, query, flags=re.IGNORECASE)
+    return query
 
-# Upload documents
-with st.expander("📤 Upload University Docs"):
-    uploaded_file = st.file_uploader("Upload PDF/DOCX/TXT", type=["pdf", "docx", "txt", "csv"])
-    if uploaded_file and st.button("➕ Add to Knowledge Base"):
-        new_chunks = convert_file_to_chunks(uploaded_file, faculty, department, level)
-        append_chunks_to_json(new_chunks)
-        st.success("Content added! Please rerun the app to reindex.")
+# Load data from JSON
+def load_chunks(json_path="data/data.json"):
+    with open(json_path) as f:
+        data = json.load(f)
+    return [item["content"] for item in data], data
 
-# Display past messages
-if "chat_history" in st.session_state:
-    for msg in st.session_state.chat_history[1:]:
-        who = "🧑 You" if msg["role"] == "user" else "🤖 Bot"
-        st.markdown(f"**{who}:** {msg['content']}")
+# Build FAISS index
+def build_index(text_chunks, model_name="all-MiniLM-L6-v2"):
+    model = SentenceTransformer(model_name)
+    embeddings = model.encode(text_chunks, convert_to_numpy=True)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
+    return index, model, embeddings
 
-# Ask a question
-query = st.text_input("💬 Ask a question")
-if query and api_key and user_id:
-    # Small talk detection
-    if is_small_talk(query):
-        reply = handle_small_talk(query)
-        st.session_state.chat_history.append({"role": "user", "content": query})
-        st.session_state.chat_history.append({"role": "assistant", "content": reply})
-        save_chat(user_id, "user", query)
-        save_chat(user_id, "assistant", reply)
-        st.rerun()
+# Semantic search
+def search(query, index, model, chunks, top_k=1):
+    query_vec = model.encode([query])[0]
+    D, I = index.search(np.array([query_vec]), k=top_k)
+    return [chunks[i] for i in I[0]], float(D[0][0])
 
-    # Sentiment detection
-    polarity = TextBlob(query).sentiment.polarity
-    if polarity < -0.3:
-        tone = "empathetic"
-    elif polarity > 0.3:
-        tone = "enthusiastic"
-    else:
-        tone = "neutral"
-    update_user_prefs(user_id, level, tone)
+# Spelling correction
+def correct_spelling(text):
+    return str(TextBlob(text).correct())
 
-    normalized = normalize_input(query, DEFAULT_VOCAB, model)
-    top_chunks = search(normalized, index, model, [c for c in chunks], top_k=3)
-    context = "\n\n".join(top_chunks)
+# Semantic normalization of each word
+def semantic_normalize(input_text, vocab_list, model):
+    input_tokens = input_text.lower().split()
+    normalized_tokens = []
+    for token in input_tokens:
+        token_emb = model.encode(token, convert_to_tensor=True)
+        vocab_embs = model.encode(vocab_list, convert_to_tensor=True)
+        scores = util.pytorch_cos_sim(token_emb, vocab_embs)[0]
+        best_match_idx = scores.argmax().item()
+        best_match = vocab_list[best_match_idx]
+        normalized_tokens.append(best_match)
+    return " ".join(normalized_tokens)
 
-    # Clarification handling
-    if len(top_chunks) == 0 or len(context.strip()) < 20:
-        reply = f"🤔 Hmm, I’m not sure I understand that, {user_name}. Can you clarify a bit more?"
-        st.session_state.chat_history.append({"role": "user", "content": query})
-        st.session_state.chat_history.append({"role": "assistant", "content": reply})
-        save_chat(user_id, "user", query)
-        save_chat(user_id, "assistant", reply)
-        st.rerun()
+# Full input normalization pipeline
+def normalize_input(text, vocab_list, model):
+    corrected = correct_spelling(text)
+    text = corrected.lower()
+    text = re.sub(r'[^\w\s]', '', text)
+    words = text.split()
+    processed = []
+    for word in words:
+        if word in ABBREVIATIONS:
+            processed.append(ABBREVIATIONS[word])
+        elif word in SYNONYMS:
+            processed.append(SYNONYMS[word])
+        else:
+            processed.append(word)
+    text = " ".join(processed)
+    return semantic_normalize(text, DEFAULT_VOCAB, model)
 
-    prompt = f"Use this context to answer in a {tone} tone. Refer to the student as {user_name}:
+# GPT generation with memory + limit
+def ask_gpt_with_memory(messages, max_history=6, model="gpt-3.5-turbo"):
+    if len(messages) > max_history + 1:
+        messages = [messages[0]] + messages[-max_history:]
+    try:
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500
+        )
+        return response.choices[0].message["content"].strip(), response["usage"]
+    except Exception as e:
+        return f"Error: {e}", {"prompt_tokens": 0, "completion_tokens": 0}
 
-{context}
+# Feedback logging
+def log_feedback(query, answer, rating):
+    with open("feedback.csv", "a") as f:
+        f.write(f"{datetime.now()},\"{query}\",\"{answer}\",{rating}\n")
 
-Question from {user_name}: {normalized}"
-    st.session_state.chat_history.append({"role": "user", "content": query})
-    save_chat(user_id, "user", query)
+# Small talk detection
+def is_small_talk(query):
+    patterns = ["hello", "hi", "how are you", "your name", "tell me a joke"]
+    return any(p in query.lower() for p in patterns)
 
-    # Streaming GPT
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=st.session_state.chat_history + [{"role": "user", "content": prompt}],
-        stream=True,
-        temperature=0.7,
-        max_tokens=500
-    )
-
-    streamed_reply = ""
-    response_placeholder = st.empty()
-    for chunk in response:
-        if "choices" in chunk and len(chunk.choices) > 0:
-            delta = chunk.choices[0].delta.get("content", "")
-            streamed_reply += delta
-            response_placeholder.markdown(f"**🤖 Bot:** {streamed_reply}")
-            time.sleep(0.01)
-
-    st.session_state.chat_history.append({"role": "assistant", "content": streamed_reply})
-    save_chat(user_id, "assistant", streamed_reply)
-    st.rerun()
-
-# Feedback
-st.markdown("---")
-st.subheader("📝 Feedback")
-if st.session_state.get("chat_history") and len(st.session_state.chat_history) > 2:
-    last_user = st.session_state.chat_history[-2]["content"]
-    last_bot = st.session_state.chat_history[-1]["content"]
-    col1, col2 = st.columns(2)
-    if col1.button("👍 Helpful"):
-        log_feedback(last_user, last_bot, "positive")
-        st.success("Thanks for your feedback!")
-    if col2.button("👎 Not Helpful"):
-        log_feedback(last_user, last_bot, "negative")
-        st.info("Feedback noted.")
+def handle_small_talk(query):
+    if "hello" in query.lower() or "hi" in query.lower():
+        return "Hi there! How can I assist you today?"
+    if "joke" in query.lower():
+        return "Why don't scientists trust atoms? Because they make up everything!"
+    if "your name" in query.lower():
+        return "I’m CrescentBot, your university assistant."
+    return "I'm here to help with anything academic-related!"
