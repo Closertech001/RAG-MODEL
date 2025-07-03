@@ -9,3 +9,4 @@ pandas
 pdfplumber
 python-docx
 PyMuPDF
+psycopg2-binary
