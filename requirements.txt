@@ -10,3 +10,4 @@ pdfplumber
 python-docx
 PyMuPDF
 psycopg2-binary
+symspellpy
