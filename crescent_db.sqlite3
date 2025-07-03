@@ -1,0 +1,43 @@
+# Create placeholder files for crescent_db.sqlite3 and feedback.csv if they don't exist.
+import os
+import sqlite3
+import csv
+
+# Paths
+db_path = "crescent_db.sqlite3"
+feedback_file = "feedback.csv"
+
+# Create SQLite database with required tables
+if not os.path.exists(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            department TEXT,
+            faculty TEXT,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            message TEXT,
+            response TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+# Create feedback.csv with headers
+if not os.path.exists(feedback_file):
+    with open(feedback_file, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["timestamp", "query", "response", "rating"])
+
+# Confirm creation
+os.path.exists(db_path), os.path.exists(feedback_file)
