@@ -3,10 +3,11 @@ import streamlit as st
 import os
 from rag_engine import (
     load_chunks, build_index, search, normalize_input, DEFAULT_VOCAB,
-    ask_gpt_with_memory, log_feedback
+    ask_gpt_with_memory, log_feedback, is_small_talk, handle_small_talk
 )
 from utils import convert_file_to_chunks, append_chunks_to_json
 from db import init_db, get_user, add_user, get_chat_history, save_chat
+from textblob import TextBlob
 
 # Initialize database
 init_db()
@@ -82,12 +83,41 @@ if "chat_history" in st.session_state:
 # Ask a question
 query = st.text_input("💬 Ask a question")
 if query and api_key and user_id:
+    # Small talk detection
+    if is_small_talk(query):
+        reply = handle_small_talk(query)
+        st.session_state.chat_history.append({"role": "user", "content": query})
+        st.session_state.chat_history.append({"role": "assistant", "content": reply})
+        save_chat(user_id, "user", query)
+        save_chat(user_id, "assistant", reply)
+        st.rerun()
+
+    # Sentiment detection
+    polarity = TextBlob(query).sentiment.polarity
+    if polarity < -0.3:
+        tone = "empathetic"
+    elif polarity > 0.3:
+        tone = "enthusiastic"
+    else:
+        tone = "neutral"
+
     normalized = normalize_input(query, DEFAULT_VOCAB, model)
     top_chunks = search(normalized, index, model, [c for c in chunks], top_k=3)
     context = "\n\n".join(top_chunks)
-    prompt = f"Use this context to answer as clearly as possible:\n\n{context}\n\nQuestion: {normalized}"
+
+    # Clarification handling if no good context
+    if len(top_chunks) == 0 or len(context.strip()) < 20:
+        reply = "🤔 I'm not quite sure what you meant. Could you please clarify your question a bit more?"
+        st.session_state.chat_history.append({"role": "user", "content": query})
+        st.session_state.chat_history.append({"role": "assistant", "content": reply})
+        save_chat(user_id, "user", query)
+        save_chat(user_id, "assistant", reply)
+        st.rerun()
+
+    prompt = f"Use this context to answer as clearly as possible in a {tone} tone:\n\n{context}\n\nQuestion: {normalized}"
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     save_chat(user_id, "user", prompt)
+
     reply, usage = ask_gpt_with_memory(st.session_state.chat_history, max_history=6)
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
     save_chat(user_id, "assistant", reply)
