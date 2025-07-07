@@ -1,13 +1,7 @@
 streamlit
 openai
+numpy
 faiss-cpu
 sentence-transformers
 textblob
-scikit-learn
-numpy
-pandas
-pdfplumber
-python-docx
-PyMuPDF
-psycopg2-binary
-symspellpy
+python-dotenv
