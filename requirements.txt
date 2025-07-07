@@ -1,8 +1,9 @@
+
 streamlit
 openai
 numpy
 faiss-cpu
 sentence-transformers
 textblob
-python-dotenv
 symspellpy
+python-dotenv
