@@ -1,4 +1,3 @@
-# rag_engine.py
 import os
 import json
 import re
@@ -6,9 +5,7 @@ import numpy as np
 import openai
 from textblob import TextBlob
 from sentence_transformers import SentenceTransformer, util
-import faiss
-from config import ABBREVIATIONS, SYNONYMS, DEFAULT_VOCAB
-from datetime import datetime
+from config import ABBREVIATIONS, SYNONYMS
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -22,6 +19,7 @@ def load_chunks(file_path):
 def build_index(text_chunks, model_name="all-MiniLM-L6-v2"):
     model = SentenceTransformer(model_name)
     embeddings = model.encode(text_chunks, convert_to_numpy=True)
+    import faiss
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
@@ -51,16 +49,11 @@ def normalize_input(text, vocab_list, model):
     text = corrected.lower()
     text = re.sub(r'[^\w\s]', '', text)
     words = text.split()
-    processed = []
-    for word in words:
-        if word in ABBREVIATIONS:
-            processed.append(ABBREVIATIONS[word])
-        elif word in SYNONYMS:
-            processed.append(SYNONYMS[word])
-        else:
-            processed.append(word)
-    text = " ".join(processed)
-    return semantic_normalize(text, vocab_list, model)
+    processed = [
+        ABBREVIATIONS.get(word, SYNONYMS.get(word, word))
+        for word in words
+    ]
+    return semantic_normalize(" ".join(processed), vocab_list, model)
 
 def ask_gpt_with_memory(messages, max_history=6, model="gpt-3.5-turbo"):
     if len(messages) > max_history + 1:
@@ -74,17 +67,18 @@ def ask_gpt_with_memory(messages, max_history=6, model="gpt-3.5-turbo"):
         )
         return response.choices[0].message["content"].strip(), response["usage"]
     except Exception as e:
-        return f"Error: {e}", {"prompt_tokens": 0, "completion_tokens": 0}
+        return f"Error: {e}", {}
 
 def is_small_talk(query):
     patterns = ["hello", "hi", "how are you", "your name", "tell me a joke"]
     return any(p in query.lower() for p in patterns)
 
 def handle_small_talk(query):
-    if "hello" in query.lower() or "hi" in query.lower():
+    q = query.lower()
+    if "hello" in q or "hi" in q:
         return "Hi there! How can I assist you today?"
-    if "joke" in query.lower():
+    if "joke" in q:
         return "Why don't scientists trust atoms? Because they make up everything!"
-    if "your name" in query.lower():
+    if "your name" in q:
         return "I’m CrescentBot, your university assistant."
     return "I'm here to help with anything academic-related!"
