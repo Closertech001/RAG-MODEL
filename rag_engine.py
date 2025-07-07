@@ -1,9 +1,11 @@
-import streamlit as st
+# crescentbot/rag_engine.py
+
 import os
 import json
 import re
 import numpy as np
 import openai
+import streamlit as st  # ✅ Added for cache decorators
 from sentence_transformers import SentenceTransformer, util
 from config import ABBREVIATIONS, SYNONYMS
 
@@ -15,14 +17,14 @@ def load_model():
 
 @st.cache_resource
 def build_cached_index():
-    chunks, _ = load_chunks("qa_dataset.json")
+    chunks, _ = load_chunks("qa_dataset.json")  # ✅ load content chunks
     model = load_model()
     embeddings = model.encode(chunks, convert_to_numpy=True)
     import faiss
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
-    return index, model, chunks
+    return index, model, chunks  # ✅ include chunks for matching
 
 def load_chunks(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
