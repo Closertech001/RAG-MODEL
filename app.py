@@ -1,7 +1,9 @@
+# crescentbot/main_app.py
+
 import streamlit as st
 import time
 import random
-from rag_engine import load_chunks, build_index, search, normalize_input, ask_gpt_with_memory, is_small_talk, handle_small_talk
+from rag_engine import load_chunks, build_cached_index, normalize_input, ask_gpt_with_memory, is_small_talk, handle_small_talk
 from memory import ContextMemory
 from symspell_setup import correct_query
 from config import BOT_PERSONALITY, DEFAULT_VOCAB
@@ -10,8 +12,7 @@ st.set_page_config(page_title="🎓 CrescentBot AI Assistant", layout="wide")
 st.title("🤖 Crescent University Assistant Bot")
 
 with st.spinner("🔍 Loading university knowledge base..."):
-    chunks, raw_data = load_chunks("qa_dataset.json")
-    index, model, embeddings = build_index(chunks)
+    index, model, chunks = build_cached_index()
 
 if "context" not in st.session_state:
     st.session_state.context = ContextMemory()
@@ -24,7 +25,7 @@ user_query = st.text_input("Ask me anything about Crescent University:")
 
 if user_query:
     with st.spinner("CrescentBot is typing..."):
-        time.sleep(random.uniform(0.8, 1.5))
+        time.sleep(random.uniform(0.5, 1.0))
 
         corrected = correct_query(user_query)
 
@@ -34,7 +35,10 @@ if user_query:
             norm_query = normalize_input(corrected, DEFAULT_VOCAB, model)
             top_match, score = search(norm_query, index, model, chunks, top_k=1)
 
-            if score > 0.6:
+            st.write("Top match score:", score)
+            st.write("Matched content:", top_match[0])
+
+            if score > 0.45:
                 response = top_match[0]
             else:
                 history = st.session_state.context.get_context()
@@ -64,7 +68,3 @@ if user_query:
 
         st.session_state.context.add_turn(user_query, response)
         st.session_state.chat_log.append({"user": user_query, "bot": response})
-
-if st.button("🔧 Download Chat History"):
-    import json
-    st.download_button("Download Chat JSON", json.dumps(st.session_state.chat_log, indent=2), "chat_log.json")
