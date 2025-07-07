@@ -5,7 +5,7 @@ import json
 import re
 import numpy as np
 import openai
-import streamlit as st  # ✅ Added for cache decorators
+import streamlit as st
 from sentence_transformers import SentenceTransformer, util
 from config import ABBREVIATIONS, SYNONYMS
 
@@ -17,14 +17,14 @@ def load_model():
 
 @st.cache_resource
 def build_cached_index():
-    chunks, _ = load_chunks("qa_dataset.json")  # ✅ load content chunks
+    chunks, raw_data = load_chunks("qa_dataset.json")
     model = load_model()
     embeddings = model.encode(chunks, convert_to_numpy=True)
     import faiss
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
-    return index, model, chunks  # ✅ include chunks for matching
+    return index, model, raw_data
 
 def load_chunks(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
@@ -33,10 +33,16 @@ def load_chunks(file_path):
         item["content"] = item["question"] + " " + item["answer"]
     return [item["content"] for item in data], data
 
-def search(query, index, model, chunks, top_k=1):
+def search(query, index, model, raw_data, top_k=1):
     query_vec = model.encode([query])[0]
     D, I = index.search(np.array([query_vec]), k=top_k)
-    return [chunks[i] for i in I[0]], float(D[0][0])
+    results = []
+    for idx in I[0]:
+        if idx < len(raw_data):
+            result = raw_data[idx]
+            results.append(result["answer"])
+    score = float(D[0][0]) if len(D[0]) > 0 else 0.0
+    return results, score
 
 def semantic_normalize(input_text, vocab_list, model):
     tokens = input_text.lower().split()
