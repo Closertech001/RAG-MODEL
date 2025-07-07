@@ -1,70 +1,95 @@
-# crescentbot/main_app.py
+# university_chatbot_app.py
 
 import streamlit as st
-import time
-import random
-from rag_engine import load_chunks, build_cached_index, normalize_input, ask_gpt_with_memory, is_small_talk, handle_small_talk
-from memory import ContextMemory
-from symspell_setup import correct_query
-from config import BOT_PERSONALITY, DEFAULT_VOCAB
+import os
+import json
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer, util
+import openai
+from textblob import TextBlob
+from symspellpy import SymSpell
+from pathlib import Path
 
-st.set_page_config(page_title="🎓 CrescentBot AI Assistant", layout="wide")
-st.title("🤖 Crescent University Assistant Bot")
+# Set OpenAI API Key
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-with st.spinner("🔍 Loading university knowledge base..."):
-    index, model, chunks = build_cached_index()
+# Load SentenceTransformer model
+embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-if "context" not in st.session_state:
-    st.session_state.context = ContextMemory()
-if "chat_log" not in st.session_state:
-    st.session_state.chat_log = []
+# Load knowledge base
+with open("qa_dataset.json", "r", encoding="utf-8") as f:
+    qa_data = json.load(f)
 
-st.markdown("---")
-st.markdown(BOT_PERSONALITY["greeting"])
-user_query = st.text_input("Ask me anything about Crescent University:")
+# Precompute embeddings
+questions = [item["question"] for item in qa_data]
+question_embeddings = embed_model.encode(questions, convert_to_tensor=True).cpu().numpy()
 
-if user_query:
-    with st.spinner("CrescentBot is typing..."):
-        time.sleep(random.uniform(0.5, 1.0))
+# Build FAISS index
+index = faiss.IndexFlatL2(question_embeddings.shape[1])
+index.add(question_embeddings)
 
-        corrected = correct_query(user_query)
+# Load SymSpell
+sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+dictionary_path = Path("frequency_dictionary_en_82_765.txt")
+sym_spell.load_dictionary(dictionary_path, 0, 1)
 
-        if is_small_talk(corrected):
-            response = handle_small_talk(corrected)
-        else:
-            norm_query = normalize_input(corrected, DEFAULT_VOCAB, model)
-            top_match, score = search(norm_query, index, model, chunks, top_k=1)
+def correct_spelling(text):
+    suggestions = sym_spell.lookup_compound(text, max_edit_distance=2)
+    return suggestions[0].term if suggestions else text
 
-            st.write("Top match score:", score)
-            st.write("Matched content:", top_match[0])
+def detect_sentiment(text):
+    polarity = TextBlob(text).sentiment.polarity
+    if polarity > 0.2:
+        return "positive"
+    elif polarity < -0.2:
+        return "negative"
+    return "neutral"
 
-            if score > 0.45:
-                response = top_match[0]
-            else:
-                history = st.session_state.context.get_context()
-                messages = [{"role": "system", "content": (
-                    "You are CrescentBot, a helpful, friendly, and empathetic assistant for Crescent University students. "
-                    "You always respond in a natural, conversational tone. Keep replies short, clear, and human-like. "
-                    "Use emojis sparingly to keep things warm but professional. Guide students politely when you don't know something."
-                )}]
-                for turn in history:
-                    messages.append({"role": "user", "content": turn["user"]})
-                    messages.append({"role": "assistant", "content": turn["bot"]})
-                messages.append({"role": "user", "content": user_query})
-                response, _ = ask_gpt_with_memory(messages)
-                if "?" in response or len(response.split()) < 10:
-                    response += f" {BOT_PERSONALITY['clarify']}"
+def search_answer(user_input):
+    query = correct_spelling(user_input.lower())
+    query_embedding = embed_model.encode([query], convert_to_tensor=True).cpu().numpy()
+    D, I = index.search(query_embedding, k=1)
+    top_score = D[0][0]
+    top_match = qa_data[I[0][0]]
+    return top_match if top_score < 0.5 else None
 
-        st.markdown(f"**You:** {user_query}")
-        st.markdown(f"**{BOT_PERSONALITY['name']}:** {response}")
+def fallback_gpt(user_input, history=[]):
+    prompt = f"""
+You are CrescentBot, a friendly and helpful assistant for a university. Be conversational, empathetic, and informative.
+User: {user_input}
+Assistant:
+"""
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "system", "content": "You are a helpful university assistant."},
+                 {"role": "user", "content": prompt}],
+        max_tokens=300
+    )
+    return response["choices"][0]["message"]["content"].strip()
 
-        follow_up = random.choice([
-            "Would you like more details on that?",
-            "Is that helpful for now?",
-            "Let me know if you want to go deeper on this!",
-            "Would you like me to explain another topic?"
-        ])
-        st.markdown(f"🗨️ _{follow_up}_")
+# Streamlit UI
+st.set_page_config(page_title="🎓 CrescentBot - University Assistant", layout="wide")
+st.title("🎓 CrescentBot - University Assistant")
 
-        st.session_state.context.add_turn(user_query, response)
-        st.session_state.chat_log.append({"user": user_query, "bot": response})
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+user_input = st.chat_input("Ask me anything about Crescent University...")
+
+if user_input:
+    st.session_state.chat_history.append({"role": "user", "content": user_input})
+
+    sentiment = detect_sentiment(user_input)
+    response = search_answer(user_input)
+
+    if response:
+        answer = response["answer"]
+    else:
+        answer = fallback_gpt(user_input, st.session_state.chat_history)
+
+    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+
+for chat in st.session_state.chat_history:
+    with st.chat_message(chat["role"]):
+        st.markdown(chat["content"])
