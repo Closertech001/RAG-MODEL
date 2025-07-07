@@ -3,11 +3,25 @@ import json
 import re
 import numpy as np
 import openai
-from textblob import TextBlob
 from sentence_transformers import SentenceTransformer, util
 from config import ABBREVIATIONS, SYNONYMS
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+@st.cache_resource
+def build_cached_index():
+    chunks, _ = load_chunks("qa_dataset.json")
+    model = load_model()
+    embeddings = model.encode(chunks, convert_to_numpy=True)
+    import faiss
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
+    return index, model, chunks
 
 def load_chunks(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
@@ -16,22 +30,10 @@ def load_chunks(file_path):
         item["content"] = item["question"] + " " + item["answer"]
     return [item["content"] for item in data], data
 
-def build_index(text_chunks, model_name="all-MiniLM-L6-v2"):
-    model = SentenceTransformer(model_name)
-    embeddings = model.encode(text_chunks, convert_to_numpy=True)
-    import faiss
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dim)
-    index.add(embeddings)
-    return index, model, embeddings
-
 def search(query, index, model, chunks, top_k=1):
     query_vec = model.encode([query])[0]
     D, I = index.search(np.array([query_vec]), k=top_k)
     return [chunks[i] for i in I[0]], float(D[0][0])
-
-def correct_spelling(text):
-    return str(TextBlob(text).correct())
 
 def semantic_normalize(input_text, vocab_list, model):
     tokens = input_text.lower().split()
@@ -45,8 +47,7 @@ def semantic_normalize(input_text, vocab_list, model):
     return " ".join(normalized)
 
 def normalize_input(text, vocab_list, model):
-    corrected = correct_spelling(text)
-    text = corrected.lower()
+    text = text.lower()
     text = re.sub(r'[^\w\s]', '', text)
     words = text.split()
     processed = [
