@@ -1,5 +1,3 @@
-# db.py
-
 import sqlite3
 from sqlite3 import Connection, Row
 import os
@@ -36,4 +34,32 @@ def init_tables():
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
         """)
+        conn.commit()
+
+# ✅ Get user by name
+def get_user(name):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE name = ?", (name,))
+        return cur.fetchone()
+
+# ✅ Create new user
+def create_user(name, faculty, department):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (name, faculty, department)
+            VALUES (?, ?, ?)
+        """, (name, faculty, department))
+        conn.commit()
+        return cur.lastrowid
+
+# ✅ Save chat history
+def save_chat(user_id, message, response):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO chats (user_id, message, response)
+            VALUES (?, ?, ?)
+        """, (user_id, message, response))
         conn.commit()
