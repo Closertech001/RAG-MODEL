@@ -12,9 +12,11 @@ def get_connection() -> Connection:
     return conn
 
 # ✅ Function to initialize tables
-def init_tables():
+jdef init_tables():
     with get_connection() as conn:
         cur = conn.cursor()
+
+        # Create users table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,8 +24,10 @@ def init_tables():
                 department TEXT,
                 faculty TEXT,
                 last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+            )
         """)
+
+        # Create chats table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,9 +35,10 @@ def init_tables():
                 message TEXT,
                 response TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            );
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
         """)
+
         conn.commit()
 
 # ✅ Get user by name
